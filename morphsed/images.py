@@ -92,6 +92,25 @@ class image(object):
             y = nrow * self.pixel_scales[1].to(units).value
         return (x, y)
 
+    def get_data_info(self):
+        '''
+        Data information to generate model image.
+
+        Returns
+        -------
+        d : dict
+            shape : (ny, nx)
+                Image array shape.
+            pixel_scale : (pixelscale_x, pixelscale_y), default units: arcsec
+                Pixel scales.
+            wcs_rotation : angle, default units: radian
+                WCS rotation, east of north.
+        '''
+        d = dict(shape=self.data.shape,
+                 pixel_scale=self.pixel_scale,
+                 wcs_rotation=self.wcs_rotation)
+        return d
+
     def sigma_clipped_stats(self, **kwargs):
         '''
         Run astropy.stats.sigma_clipped_stats to get the basic statistics of
