@@ -255,6 +255,14 @@ class image_atlas(object):
     '''
     def __init__(self, image_list=None, zp_list=None, band_list=None):
         '''
+        Parameters
+        ----------
+        image_list (optional) : List
+            List of `image`.
+        zp_list (optional) : List
+            List of magnitude zeropoint.
+        band_list (optional) : List
+            List of band name.  Check `instrument_info` for band names.
         '''
         if image_list is None:
             self.image_list = []
@@ -274,9 +282,20 @@ class image_atlas(object):
             for loop, img in enumerate(self.image_list):
                 img.set_zero_point(zp_list[loop])
 
-    def __getitem__(self, filter_name):
+        self.__length = len(image_list)
+
+    def __getitem__(self, key):
         '''
-        Get the image data using the filter name.
+        Get the image data using the filter name or number index.
         '''
-        idx = self.band_list.index(filter_name)
+        if type(key) is str:
+            idx = self.band_list.index(key)
+        elif type(key) is int:
+            idx = key
         return self.image_list[idx]
+
+    def __len__(self):
+        '''
+        Get the length of the data list.
+        '''
+        return self.__length
