@@ -8,6 +8,7 @@ from astropy.stats import sigma_clipped_stats
 from astropy.wcs.utils import proj_plane_pixel_scales
 from .plot import plot_image
 from .instrument_info import get_zp
+from .utils import get_wcs_rotation
 
 __all__ = ['image', 'image_atlas']
 
@@ -27,7 +28,7 @@ class image(object):
     * set_zero_point : Set magnitude zero point.
     '''
     def __init__(self, filename=None, hdu=0, unit=None, zero_point=None,
-                 pixel_scales=None, mask=None, verbose=True):
+                 pixel_scales=None, wcs_rotation=None, mask=None, verbose=True):
         '''
         Parameters
         ----------
@@ -41,6 +42,8 @@ class image(object):
             Magnitude zero point.
         pixel_scales (optional) : tuple
             Pixel scales along the first and second directions, units: arcsec.
+        wcs_rotation (optional) : float
+            WCS rotation, east of north, units: radian.
         mask (optional) : 2D bool array
             The image mask.
         verbose : bool (default: True)
@@ -58,6 +61,13 @@ class image(object):
             self.pixel_scales = None
         else:
             self.pixel_scales = (pixel_scales[0]*u.arcsec, pixel_scales[1]*u.arcsec)
+
+        if self.data.wcs and (wcs_rotation is None):
+            self.wcs_rotation = get_wcs_rotation(self.data.wcs)
+        elif wcs_rotation is not None:
+            self.wcs_rotation = wcs_rotation * u.radian
+        else:
+            self.wcs_rotation = None
 
     def get_size(self, units='pixel'):
         '''
@@ -134,6 +144,71 @@ class image(object):
             ax.set_xlabel(r'$\Delta X$ ({0})'.format(units), fontsize=24)
             ax.set_ylabel(r'$\Delta Y$ ({0})'.format(units), fontsize=24)
         return ax
+
+    def plot_direction(self, ax, xy=(0, 0), len_E=None, len_N=None, color='k', fontsize=20,
+                       linewidth=2, frac_len=0.1, units='arcsec', backextend=0.05):
+        '''
+        Plot the direction arrow. Only applied to plots using WCS.
+
+        Parameters
+        ----------
+        ax : Axis
+            Axis to plot the direction.
+        xy : (x, y)
+            Coordinate of the origin of the arrows.
+        length : float
+            Length of the arrows, units: pixel.
+        units: string (default: arcsec)
+            Units of xy.
+        '''
+        xlim = ax.get_xlim()
+        len_total = np.abs(xlim[1] - xlim[0])
+        pixelscale = self.pixel_scales[0].to('degree').value
+        if len_E is None:
+            len_E = len_total * frac_len / pixelscale
+        if len_N is None:
+            len_N = len_total * frac_len / pixelscale
+
+        wcs = self.data.wcs
+        header = wcs.to_header()
+        d_ra = len_E * pixelscale
+        d_dec = len_N * pixelscale
+        ra = [header['CRVAL1'], header['CRVAL1']+d_ra, header['CRVAL1']]
+        dec = [header['CRVAL2'], header['CRVAL2'], header['CRVAL2']+d_dec]
+        ra_pix, dec_pix = wcs.all_world2pix(ra, dec, 1)
+        d_arrow1 = [ra_pix[1]-ra_pix[0], dec_pix[1]-dec_pix[0]]
+        d_arrow2 = [ra_pix[2]-ra_pix[0], dec_pix[2]-dec_pix[0]]
+        l_arrow1 = np.sqrt(d_arrow1[0]**2 + d_arrow1[1]**2)
+        l_arrow2 = np.sqrt(d_arrow2[0]**2 + d_arrow2[1]**2)
+        d_arrow1 = np.array(d_arrow1) / l_arrow1 * len_E * pixelscale
+        d_arrow2 = np.array(d_arrow2) / l_arrow2 * len_N * pixelscale
+
+        def sign_2_align(sign):
+            '''
+            Determine the alignment of the text.
+            '''
+            if sign[0] < 0:
+                ha = 'right'
+            else:
+                ha = 'left'
+            if sign[1] < 0:
+                va = 'top'
+            else:
+                va = 'bottom'
+            return ha, va
+        ha1, va1 = sign_2_align(np.sign(d_arrow1))
+        ha2, va2 = sign_2_align(np.sign(d_arrow2))
+
+        xy_e = (xy[0] - d_arrow1[0] * backextend, xy[1] - d_arrow1[1] * backextend)
+        ax.annotate('E', xy=xy_e, xycoords='data', fontsize=fontsize,
+                    xytext=(d_arrow1[0]+xy[0], d_arrow1[1]+xy[1]), color=color,
+                    arrowprops=dict(color=color, arrowstyle="<-", lw=linewidth),
+                    ha=ha1, va=va1)
+        xy_n = (xy[0] - d_arrow2[0] * backextend, xy[1] - d_arrow2[1] * backextend)
+        ax.annotate('N', xy=xy_n, xycoords='data', fontsize=fontsize,
+                    xytext=(d_arrow2[0]+xy[0], d_arrow2[1]+xy[1]), color=color,
+                    arrowprops=dict(color=color, arrowstyle="<-", lw=linewidth),
+                    ha=ha2, va=va2)
 
     def set_data(self, data, unit):
         '''
