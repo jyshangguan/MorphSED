@@ -9,6 +9,7 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 from .plot import plot_image
 from .instrument_info import get_zp
 from .utils import get_wcs_rotation
+from .math import Maskellipse
 
 __all__ = ['image', 'image_atlas']
 
@@ -239,6 +240,27 @@ class image(object):
             Unit for CCDData.
         '''
         self.data = CCDData(data, unit=unit)
+
+    def make_mask(self,sources,magnification=3.):
+        '''
+        make mask for the extension.
+
+        Parameters
+        ----------
+        sources : a to-be masked source table (can generate from photutils source detection)
+        magnification : expand factor to generate mask 
+        '''
+        mask=np.zeros_like(self.data, dtype=bool)
+        mask[np.isnan(self.data)] = True
+        mask[np.isinf(self.data)] = True
+        for loop in range(len(sources)):
+            position = (sources['xcentroid'][loop].value,sources['ycentroid'][loop].value)
+            a = sources['semimajor_axis_sigma'][loop].value
+            b = sources['semiminor_axis_sigma'][loop].value
+            theta = sources['orientation'][loop].value*180./np.pi
+            maskRp=Maskellipse(mask,bool,position,magnification*a,(1-b/a),theta)
+            mask=maskRp['mask']
+        self.data.mask = mask
 
     def set_mask(self, mask):
         '''
