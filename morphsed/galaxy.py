@@ -65,8 +65,11 @@ def IFU_to_img(IFU,wave,band,step=0.5):
 
 def Cal_map(r, type, paradic):
     for case in switch(type):
-        if case(''):
+        if case('linear'):
             return paradic['b'] + paradic['k']*r
+            break
+        if case('exp'):
+            return (paradic['in']-paradic['out'])*np.exp(-r/paradic['k'])+paradic['out']
             break
         if case():
             raise ValueError("Unidentified method for calculate age or Z map")
@@ -140,7 +143,7 @@ class galaxy(object):
         gemerate the SED IFU for a galaxy object
         shape: return 2D spatial shape
         convolve_func: a 2D kernel if convolution is needed
-        wavelength: 1D array, the wavelength sample 
+        wavelength: 1D array, the wavelength sample
         '''
         ny = shape[0]
         nx = shape[1]

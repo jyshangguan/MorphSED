@@ -9,7 +9,15 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 from .plot import plot_image
 from .instrument_info import get_zp
 from .utils import get_wcs_rotation
-from .math import Maskellipse
+from .math import Maskellipse,polynomialfit
+from photutils.segmentation import deblend_sources
+from astropy.convolution import Gaussian2DKernel
+from astropy.stats import gaussian_fwhm_to_sigma
+from photutils import detect_threshold
+from photutils import detect_sources
+from photutils import source_properties
+from astropy.table import Table, Column
+from astropy.wcs import WCS
 
 __all__ = ['image', 'image_atlas']
 
@@ -69,6 +77,31 @@ class image(object):
             self.wcs_rotation = wcs_rotation * u.radian
         else:
             self.wcs_rotation = None
+        self.sources_catalog = None
+        self.ss_data = None
+
+    def get_size(self, units='pixel'):
+        '''
+        Get the size of the image.
+
+        Parameters
+        ----------
+        units : string
+            Units of the size (pixel or angular units).
+
+        Returns
+        -------
+        x, y : float
+            Size along X and Y axes.
+        '''
+        nrow, ncol = self.data.shape
+        if units == 'pixel':
+            x = ncol
+            y = nrow
+        else:
+            x = ncol * self.pixel_scales[0].to(units).value
+            y = nrow * self.pixel_scales[1].to(units).value
+        return (x, y)
 
     def get_size(self, units='pixel'):
         '''
@@ -241,26 +274,56 @@ class image(object):
         '''
         self.data = CCDData(data, unit=unit)
 
-    def make_mask(self,sources,magnification=3.):
+
+    def source_detection_individual(self, psfFWHM, nsigma=3.0):
+        '''
+        Parameters
+        ----------
+        psfFWHM : float
+            FWHM of the imaging point spread function
+        nsigma : float
+            source detection threshold
+        '''
+        data = np.array(self.data.copy())
+        psfFWHMpix = psfFWHM / self.pixel_scales[0].value
+        thresholder = detect_threshold(data, nsigma=nsigma)
+        sigma = psfFWHMpix * gaussian_fwhm_to_sigma
+        kernel = Gaussian2DKernel(sigma, x_size=5, y_size=5)
+        kernel.normalize()
+        segm = detect_sources(data, thresholder, npixels=5, filter_kernel=kernel)
+        props = source_properties(data, segm)
+        tab = Table(props.to_table())
+        srcPstradec = self.data.wcs.all_pix2world(tab['xcentroid'], tab['ycentroid'],1)
+        tab.add_column(Column(srcPstradec[0],name='ra'))
+        tab.add_column(Column(srcPstradec[1],name='dec'))
+        self.sources_catalog = tab
+
+
+    def make_mask(self,sources=None,magnification=3.):
         '''
         make mask for the extension.
 
         Parameters
         ----------
         sources : a to-be masked source table (can generate from photutils source detection)
-        magnification : expand factor to generate mask 
+                  if None, will use its own source catalog
+        magnification : expand factor to generate mask
         '''
         mask=np.zeros_like(self.data, dtype=bool)
         mask[np.isnan(self.data)] = True
         mask[np.isinf(self.data)] = True
+        if sources is None:
+            sources = self.sources_catalog
         for loop in range(len(sources)):
-            position = (sources['xcentroid'][loop].value,sources['ycentroid'][loop].value)
-            a = sources['semimajor_axis_sigma'][loop].value
-            b = sources['semiminor_axis_sigma'][loop].value
-            theta = sources['orientation'][loop].value*180./np.pi
-            maskRp=Maskellipse(mask,bool,position,magnification*a,(1-b/a),theta)
-            mask=maskRp['mask']
+            position = (sources['xcentroid'][loop],sources['ycentroid'][loop])
+            a = sources['semimajor_axis_sigma'][loop]
+            b = sources['semiminor_axis_sigma'][loop]
+            theta = sources['orientation'][loop]*180./np.pi
+            mask=Maskellipse(mask,position,magnification*a,(1-b/a),theta)
         self.data.mask = mask
+        if self.ss_data is not None:
+            self.ss_data.mask = mask
+
 
     def set_mask(self, mask):
         '''
@@ -273,6 +336,8 @@ class image(object):
         '''
         assert self.data.shape == mask.shape, 'Mask shape incorrect!'
         self.data.mask = mask
+        if self.ss_data is not Nont:
+            self.ss_data.mask = mask
 
     def set_pixel_scales(self, pixel_scales):
         '''
@@ -289,6 +354,20 @@ class image(object):
         '''
         self.zero_point = zp
 
+    def sky_subtraction(self, order=3 ):
+        '''
+        Do polynomial-fitting sky subtraction
+        Parameters
+        ----------
+        order (optional) : int
+            order of the polynomial
+        '''
+        data = np.array(self.data.copy())
+        maskplus = self.data.mask.copy()
+        backR=polynomialfit(data,maskplus.astype(bool),order=order)
+        background=backR['bkg']
+        self.ss_data = CCDData(data-background, unit=self.data.unit)
+        self.ss_data.mask = maskplus
 
 class image_atlas(object):
     '''
@@ -340,3 +419,6 @@ class image_atlas(object):
         Get the length of the data list.
         '''
         return self.__length
+
+    def source_detection(snr=3.0):
+        return
