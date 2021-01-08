@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy import units as u
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.nddata import Cutout2D
@@ -9,14 +10,14 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 from .plot import plot_image
 from .instrument_info import get_zp
 from .utils import get_wcs_rotation
-from .math import Maskellipse,polynomialfit
+from .math import Maskellipse,polynomialfit,cross_match
 from photutils.segmentation import deblend_sources
 from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma
 from photutils import detect_threshold
 from photutils import detect_sources
 from photutils import source_properties
-from astropy.table import Table, Column
+from astropy.table import Table, Column, join, join_skycoord
 from astropy.wcs import WCS
 
 __all__ = ['image', 'image_atlas']
@@ -78,6 +79,7 @@ class image(object):
         else:
             self.wcs_rotation = None
         self.sources_catalog = None
+        self.sources_skycord = None
         self.ss_data = None
 
     def get_size(self, units='pixel'):
@@ -275,7 +277,7 @@ class image(object):
         self.data = CCDData(data, unit=unit)
 
 
-    def source_detection_individual(self, psfFWHM, nsigma=3.0):
+    def source_detection_individual(self, psfFWHM, nsigma=3.0, sc_key=''):
         '''
         Parameters
         ----------
@@ -293,10 +295,11 @@ class image(object):
         segm = detect_sources(data, thresholder, npixels=5, filter_kernel=kernel)
         props = source_properties(data, segm)
         tab = Table(props.to_table())
-        srcPstradec = self.data.wcs.all_pix2world(tab['xcentroid'], tab['ycentroid'],1)
-        tab.add_column(Column(srcPstradec[0],name='ra'))
-        tab.add_column(Column(srcPstradec[1],name='dec'))
         self.sources_catalog = tab
+        srcPstradec = self.data.wcs.all_pix2world(tab['xcentroid'], tab['ycentroid'],1)
+        sc = SkyCoord(srcPstradec[0], srcPstradec[1], unit='deg')
+        sctab = Table([sc,np.arange(len(sc))],names=['sc','sloop_{0}'.format(sc_key)])
+        self.sources_skycord = sctab
 
 
     def make_mask(self,sources=None,magnification=3.):
@@ -373,7 +376,7 @@ class image_atlas(object):
     '''
     Many images.
     '''
-    def __init__(self, image_list=None, zp_list=None, band_list=None):
+    def __init__(self, image_list=None, zp_list=None, band_list=None, psfFWHM_list=None):
         '''
         Parameters
         ----------
@@ -402,7 +405,13 @@ class image_atlas(object):
             for loop, img in enumerate(self.image_list):
                 img.set_zero_point(zp_list[loop])
 
+        if psfFWHM_list is None:
+            self.psfFWHM_list = []
+        else:
+            self.psfFWHM_list = psfFWHM_list
+
         self.__length = len(image_list)
+        self.common_catalog = None
 
     def __getitem__(self, key):
         '''
@@ -420,5 +429,78 @@ class image_atlas(object):
         '''
         return self.__length
 
-    def source_detection(snr=3.0):
-        return
+    def source_detection(self,nsigma=3.0):
+        '''
+        Do multi-band source detection
+        Parameters
+        ----------
+        nsigma : float, or a array with same size as image_atlas
+            source detection threshold
+        '''
+        if type(nsigma) == float:
+            nsigma = nsigma * np.ones(self.__length,dtype=float)
+        for loop in range(self.__length):
+            self.image_list[loop].source_detection_individual(self.psfFWHM_list[loop],nsigma=nsigma[loop],sc_key=loop+1)
+
+
+    def make_common_catalog(self,CM_separation=2.5,magnification=3.0,applylist=None):
+        '''
+        Do multi-band source detection
+        Parameters
+        ----------
+        CM_separation : float
+        angular separation used to do sky coordinates crossmatching, unit in deg
+        magnification : float, or a array with same size as image_atlas
+                        magnification for generating mask foe each image
+        applylist : [list of index]
+        None for all images
+        '''
+        if type(magnification) == float:
+            magnification = magnification * np.ones(self.__length,dtype=float)
+        if applylist is None:
+            applylist = np.arange(self.__length)
+        cats = []
+        for loop in applylist:
+            cats.append(self.image_list[loop].sources_skycord)
+        comc = cross_match(cats,angular_sep = 2.5)
+        lencc = len(comc)
+        master_a = np.zeros(lencc, dtype = float)
+        master_b = np.zeros(lencc, dtype = float)
+        for loop in range(len(comc)):
+            a = []
+            b = []
+            for loop2 in applylist:
+                a.append(self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                b.append(self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+            master_a[loop] = np.max(np.array(a))
+            master_b[loop] = np.max(np.array(b))
+        comc.add_column(Column(master_a, name = 'master_a'))
+        comc.add_column(Column(master_b, name = 'master_b'))
+        self.common_catalog = comc
+
+
+    def master_mask(self, magnification=3.0, applylist=None):
+        '''
+        Do multi-band source masking
+        Parameters
+        ----------
+        magnification : float, or a array with same size as image_atlas
+                        magnification for generating mask foe each image
+        applylist : [list of index]
+        None for all images
+        '''
+        if type(magnification) == float:
+            magnification = magnification * np.ones(self.__length,dtype=float)
+        if applylist is None:
+            applylist = np.arange(self.__length)
+        comc = self.common_catalog.copy()
+        for loop2 in applylist:
+            for loop in range(len(comc)):
+                self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_a'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_b'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+            indexes = np.delete(np.arange(len(self.image_list[loop2].sources_catalog)), comc['sloop_{0}'.format(loop2+1)])
+            self.image_list[loop2].sources_catalog.remove_rows(indexes)
+        for loop2 in range(self.__length):
+            self.image_list[loop2].make_mask(magnification=magnification[loop2])
