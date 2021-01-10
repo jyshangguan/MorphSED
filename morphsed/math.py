@@ -3,6 +3,7 @@ from astropy.modeling import models, fitting
 from astropy.table import Table, Column, join, join_skycoord
 import astropy.units as u
 from astropy.coordinates import SkyCoord
+import warnings
 
 def elliptical_func(xmesh,posi,a,ellipticity,PA,ymesh=None):
     x=xmesh-posi[0]
