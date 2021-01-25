@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy import units as u
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.nddata import CCDData
 from astropy.nddata import Cutout2D
@@ -9,6 +10,20 @@ from astropy.wcs.utils import proj_plane_pixel_scales
 from .plot import plot_image
 from .instrument_info import get_zp
 from .utils import get_wcs_rotation
+from astropy.visualization import simple_norm, make_lupton_rgb
+from .math import Maskellipse,polynomialfit,cross_match
+from photutils.segmentation import deblend_sources
+from astropy.convolution import Gaussian2DKernel
+from astropy.stats import gaussian_fwhm_to_sigma
+from photutils import detect_threshold
+from photutils import detect_sources
+from photutils import source_properties
+from astropy.table import Table, Column, join, join_skycoord
+from astropy.wcs import WCS
+from astropy.nddata import NDData
+from photutils.psf import extract_stars
+import matplotlib.colors as colors
+from photutils import EPSFBuilder
 
 __all__ = ['image', 'image_atlas']
 
@@ -68,6 +83,34 @@ class image(object):
             self.wcs_rotation = wcs_rotation * u.radian
         else:
             self.wcs_rotation = None
+        self.sources_catalog = None
+        self.sigma_image = None
+        self.sources_skycord = None
+        self.ss_data = None
+        self.PSF = None
+
+    def get_size(self, units='pixel'):
+        '''
+        Get the size of the image.
+
+        Parameters
+        ----------
+        units : string
+            Units of the size (pixel or angular units).
+
+        Returns
+        -------
+        x, y : float
+            Size along X and Y axes.
+        '''
+        nrow, ncol = self.data.shape
+        if units == 'pixel':
+            x = ncol
+            y = nrow
+        else:
+            x = ncol * self.pixel_scales[0].to(units).value
+            y = nrow * self.pixel_scales[1].to(units).value
+        return (x, y)
 
     def get_size(self, units='pixel'):
         '''
@@ -240,6 +283,58 @@ class image(object):
         '''
         self.data = CCDData(data, unit=unit)
 
+
+    def source_detection_individual(self, psfFWHM, nsigma=3.0, sc_key=''):
+        '''
+        Parameters
+        ----------
+        psfFWHM : float
+            FWHM of the imaging point spread function
+        nsigma : float
+            source detection threshold
+        '''
+        data = np.array(self.data.copy())
+        psfFWHMpix = psfFWHM / self.pixel_scales[0].value
+        thresholder = detect_threshold(data, nsigma=nsigma)
+        sigma = psfFWHMpix * gaussian_fwhm_to_sigma
+        kernel = Gaussian2DKernel(sigma, x_size=5, y_size=5)
+        kernel.normalize()
+        segm = detect_sources(data, thresholder, npixels=5, filter_kernel=kernel)
+        props = source_properties(data, segm)
+        tab = Table(props.to_table())
+        self.sources_catalog = tab
+        srcPstradec = self.data.wcs.all_pix2world(tab['xcentroid'], tab['ycentroid'],1)
+        sc = SkyCoord(srcPstradec[0], srcPstradec[1], unit='deg')
+        sctab = Table([sc,np.arange(len(sc))],names=['sc','sloop_{0}'.format(sc_key)])
+        self.sources_skycord = sctab
+
+
+    def make_mask(self,sources=None,magnification=3.):
+        '''
+        make mask for the extension.
+
+        Parameters
+        ----------
+        sources : a to-be masked source table (can generate from photutils source detection)
+                  if None, will use its own source catalog
+        magnification : expand factor to generate mask
+        '''
+        mask=np.zeros_like(self.data, dtype=bool)
+        mask[np.isnan(self.data)] = True
+        mask[np.isinf(self.data)] = True
+        if sources is None:
+            sources = self.sources_catalog
+        for loop in range(len(sources)):
+            position = (sources['xcentroid'][loop],sources['ycentroid'][loop])
+            a = sources['semimajor_axis_sigma'][loop]
+            b = sources['semiminor_axis_sigma'][loop]
+            theta = sources['orientation'][loop]*180./np.pi
+            mask=Maskellipse(mask,position,magnification*a,(1-b/a),theta)
+        self.data.mask = mask
+        if self.ss_data is not None:
+            self.ss_data.mask = mask
+
+
     def set_mask(self, mask):
         '''
         Set mask for the extension.
@@ -251,6 +346,8 @@ class image(object):
         '''
         assert self.data.shape == mask.shape, 'Mask shape incorrect!'
         self.data.mask = mask
+        if self.ss_data is not Nont:
+            self.ss_data.mask = mask
 
     def set_pixel_scales(self, pixel_scales):
         '''
@@ -267,12 +364,76 @@ class image(object):
         '''
         self.zero_point = zp
 
+    def sky_subtraction(self, order=3 , filepath = None):
+        '''
+        Do polynomial-fitting sky subtraction
+        Parameters
+        ----------
+        order (optional) : int
+            order of the polynomial
+        '''
+        data = np.array(self.data.copy())
+        maskplus = self.data.mask.copy()
+        backR=polynomialfit(data,maskplus.astype(bool),order=order)
+        background=backR['bkg']
+        self.ss_data = CCDData(data-background, unit=self.data.unit)
+        self.ss_data.mask = maskplus
+        if filepath is not None:
+            hdu_temp = fits.PrimaryHDU(data-background)
+            hdu_temp.writeto(filepath, overwrite=True)
+
+    def read_ss_image(self,filepath):
+        '''
+        read sky subtracted image from "filepath"
+        '''
+        hdu = fits.open(filepath)
+        self.ss_data = CCDData(hdu[0].data, unit=self.data.unit)
+        self.ss_data.mask = self.data.mask.copy()
+
+    def cal_sigma_image(self,filepath=None):
+        '''
+    	Construct sigma map following the same procedure as Galfit (quadruture sum of sigma at each pixel from source and sky background).
+    	Note
+        ----------
+    	'GAIN' keyword must be available in the image header and ADU x GAIN = electron
+
+    	Parameters
+        ----------
+    		filepath:
+    			Whether and where to save sigma map
+        '''
+        GAIN = self.data.header['CELL.GAIN']
+        if self.ss_data is None:
+            raise ValueError(" Please do sky subtration first !!!")
+        data = np.array(self.ss_data.copy())
+        mask = self.ss_data.mask.copy()
+        bkgrms = np.nanstd(data[~mask.astype(bool)])
+        data[~mask.astype(bool)] = 0.
+        sigmap = np.sqrt(data/GAIN+bkgrms**2)
+        self.sigma_image = sigmap
+        if filepath is not None:
+            hdu_temp = fits.PrimaryHDU(sigmap)
+            hdu_temp.writeto(filepath, overwrite=True)
+
+    def read_sigmap(self, filepath):
+        '''
+        read sigma image from "filepath"
+        '''
+        hdu = fits.open(filepath)
+        self.sigma_image = hdu[0].data
+
+    def read_PSF(self, filepath):
+        '''
+        read PSF image from "filepath"
+        '''
+        hdu = fits.open(filepath)
+        self.PSF = hdu[0].data
 
 class image_atlas(object):
     '''
     Many images.
     '''
-    def __init__(self, image_list=None, zp_list=None, band_list=None):
+    def __init__(self, image_list=None, zp_list=None, band_list=None, psfFWHM_list=None):
         '''
         Parameters
         ----------
@@ -301,7 +462,13 @@ class image_atlas(object):
             for loop, img in enumerate(self.image_list):
                 img.set_zero_point(zp_list[loop])
 
+        if psfFWHM_list is None:
+            self.psfFWHM_list = []
+        else:
+            self.psfFWHM_list = psfFWHM_list
+
         self.__length = len(image_list)
+        self.common_catalog = None
 
     def __getitem__(self, key):
         '''
@@ -318,3 +485,178 @@ class image_atlas(object):
         Get the length of the data list.
         '''
         return self.__length
+
+    def source_detection(self,nsigma=3.0):
+        '''
+        Do multi-band source detection
+        Parameters
+        ----------
+        nsigma : float, or a array with same size as image_atlas
+            source detection threshold
+        '''
+        if type(nsigma) == float:
+            nsigma = nsigma * np.ones(self.__length,dtype=float)
+        for loop in range(self.__length):
+            self.image_list[loop].source_detection_individual(self.psfFWHM_list[loop],nsigma=nsigma[loop],sc_key=loop+1)
+
+
+    def make_common_catalog(self,CM_separation=2.5,magnification=3.0,applylist=None):
+        '''
+        Do multi-band source detection
+        Parameters
+        ----------
+        CM_separation : float
+        angular separation used to do sky coordinates crossmatching, unit in deg
+        magnification : float, or a array with same size as image_atlas
+                        magnification for generating mask foe each image
+        applylist : [list of index]
+        None for all images
+        '''
+        if type(magnification) == float:
+            magnification = magnification * np.ones(self.__length,dtype=float)
+        if applylist is None:
+            applylist = np.arange(self.__length)
+        cats = []
+        for loop in applylist:
+            cats.append(self.image_list[loop].sources_skycord)
+        comc = cross_match(cats,angular_sep = 2.5)
+        lencc = len(comc)
+        master_a = np.zeros(lencc, dtype = float)
+        master_b = np.zeros(lencc, dtype = float)
+        for loop in range(len(comc)):
+            a = []
+            b = []
+            for loop2 in applylist:
+                a.append(self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                b.append(self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+            master_a[loop] = np.max(np.array(a))
+            master_b[loop] = np.max(np.array(b))
+        comc.add_column(Column(master_a, name = 'master_a'))
+        comc.add_column(Column(master_b, name = 'master_b'))
+        self.common_catalog = comc
+
+    def sky_subtraction(self,order=3,filepaths=None):
+        '''
+        Do multi-band sky subtration
+        Parameters
+        ----------
+        order (optional) : int
+            order of the polynomial
+        filepaths : filepath to store the sky subtracted images
+        '''
+        if type(order) == int:
+            order = order * np.ones(self.__length,dtype=int)
+        for loop in range(self.__length):
+            if filepaths is None:
+                self.image_list[loop].sky_subtraction(order[loop])
+            else:
+                self.image_list[loop].sky_subtraction(order[loop],filepath=filepaths[loop])
+
+    def master_mask(self, magnification=3.0, applylist=None):
+        '''
+        Do multi-band source masking
+        Parameters
+        ----------
+        magnification : float, or a array with same size as image_atlas
+                        magnification for generating mask foe each image
+        applylist : [list of index]
+        None for all images
+        '''
+        if type(magnification) == float:
+            magnification = magnification * np.ones(self.__length,dtype=float)
+        if applylist is None:
+            applylist = np.arange(self.__length)
+        comc = self.common_catalog.copy()
+        commonsourcelist = []
+        for loop2 in applylist:
+            newsc = self.image_list[loop2].sources_catalog.copy()
+            for loop in range(len(comc)):
+                self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_a'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_b'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+            indexes = np.delete(np.arange(len(self.image_list[loop2].sources_catalog)), comc['sloop_{0}'.format(loop2+1)])
+            newsc.remove_rows(indexes)
+            commonsourcelist.append(newsc)
+        for loop2 in range(self.__length):
+            self.image_list[loop2].make_mask(sources=commonsourcelist[loop2],magnification=magnification[loop2])
+
+    def generate_PSFs(self, equivalent_radius=2., size = 20.,oversampling=1, plot=None, filepaths=None):
+        '''
+        Generate effective point spread fuctions (ePSFs) for each image
+        Parameters
+        ----------
+        equivalent_radius : float, unit arcsec
+                            radius criteria to indentify star
+        size : float, unit pixel
+               use what size box to extract stars
+        oversampling : int
+                       oversample the ePSF
+        plot : None for not plot stars & ePSF
+               list like [1,2,3] to plot rgb image
+        filepaths : filepath to store the ePSFs
+        '''
+        stars = self.common_catalog.copy()
+        remolist = []
+        for loop in range(len(stars)):
+            for loop2 in range(self.__length):
+                a = (self.image_list[loop2].sources_catalog['equivalent_radius'][stars['sloop_{0}'.format(loop2+1)][loop]])*self.image_list[loop2].pixel_scales[0].value
+                if (a > equivalent_radius):
+                    remolist.append(loop)
+                    break
+        stars.remove_rows(remolist)
+        star_images = []
+        PSFs = []
+        for loop2 in range(self.__length):
+            newsc = self.image_list[loop2].sources_catalog.copy()
+            indexes = np.delete(np.arange(len(self.image_list[loop2].sources_catalog)), stars['sloop_{0}'.format(loop2+1)])
+            newsc.remove_rows(indexes)
+            stars_tbl = Table()
+            stars_tbl['x']=np.array(newsc['maxval_xpos'])
+            stars_tbl['y']=np.array(newsc['maxval_ypos'])
+            nddata = NDData(data=np.array(self.image_list[loop2].ss_data))
+            Tstar = extract_stars(nddata, stars_tbl, size=size)
+            epsf_builder = EPSFBuilder(oversampling=oversampling, maxiters=15,progress_bar=False)
+            epsf, fitted_stars = epsf_builder(Tstar)
+            self.image_list[loop2].PSF = epsf.data
+            if filepaths is not None:
+                hdu = fits.PrimaryHDU(epsf.data.astype('float32'))
+                After = fits.HDUList([hdu])
+                After.writeto(filepaths[loop2],overwrite= True)
+            if plot is not None:
+                star_images.append(Tstar)
+                PSFs.append(epsf.data)
+        if plot is not None:
+            tlens = len(stars)
+            if (((tlens//5)+1)*5-tlens) < (((tlens//4)+1)*4-tlens):
+                ncols = 5
+                nrows = (tlens//5)+1
+            else:
+                ncols = 4
+                nrows = (tlens//4)+1
+            fig, ax = plt.subplots(nrows=nrows, ncols=ncols, figsize=(3*ncols, 3*nrows),squeeze=True)
+            ax = ax.ravel()
+            for i in range(tlens):
+                if len(plot) > 2:
+                    star_b = star_images[plot[0]][i].data*100./np.sum(star_images[plot[0]][i].data)
+                    star_g = star_images[plot[1]][i].data*100./np.sum(star_images[plot[1]][i].data)
+                    star_r = star_images[plot[2]][i].data*100./np.sum(star_images[plot[2]][i].data)
+                    norm = simple_norm(star_b, 'log', percent=99.)
+                    image = make_lupton_rgb(star_r, star_g, star_b, Q=10)
+                else:
+                    image = star_images[plot[0]][i].data
+                    norm = simple_norm(image, 'log', percent=99.)
+                ax[i].imshow(image,norm=norm ,origin='lower')
+            plt.show()
+            fig=plt.figure(figsize=(10,10))
+            if len(plot) > 2:
+                star_b = PSFs[plot[0]]*100./np.sum(PSFs[plot[0]])
+                star_g = PSFs[plot[1]]*100./np.sum(PSFs[plot[1]])
+                star_r = PSFs[plot[2]]*100./np.sum(PSFs[plot[2]])
+                norm = simple_norm(star_b, 'log', percent=99.)
+                image = make_lupton_rgb(star_r, star_g, star_b, Q=10)
+            else:
+                image = PSFs[plot[0]]
+                norm = simple_norm(image, 'log', percent=99.)
+            plt.imshow(image,norm=norm ,origin='lower')
+            plt.show()
