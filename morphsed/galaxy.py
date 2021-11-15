@@ -1,6 +1,13 @@
 import ezgal
 import pyprofit
 from scipy.integrate import trapz
+from astropy.convolution import convolve_fft
+import numpy as np
+from astropy.table import Table
+from scipy.interpolate import interp1d
+import sys
+sys.path.append('/Users/liruancun/Works/GitHub/MorphSED/morphsed/')
+from sed_interp import sed_bc03
 
 '''
 "allbands":
@@ -74,7 +81,7 @@ def Cal_map(r, type, paradic):
         if case():
             raise ValueError("Unidentified method for calculate age or Z map")
 
-class galaxy(object):
+class Galaxy(object):
     '''
     the galaxy object
     with physical subcomponents and parameters
@@ -89,6 +96,8 @@ class galaxy(object):
         self.ageparams={}
         self.Zparams={}
         self.maglist = []
+        self.imshape = None
+        self.mass_map = {}
     def reset_mass(self,mass):
         '''
         reset the mass of a galaxy object
@@ -121,7 +130,11 @@ class galaxy(object):
             self.subCs.update({Pro_names : [params]})
             self.ageparams.update({Pro_names : [ageparam]})
             self.Zparams.update({Pro_names : [Zparam]})
+            self.mass_map.update({Pro_names : []})
+        #print (self.mass_map)
         self.maglist.append(params['mag'])
+        #print (self.maglist)
+
     def generate_mass_map(self,shape,convolve_func):
         '''
         gemerate the mass distribution map for a galaxy object
@@ -137,7 +150,33 @@ class galaxy(object):
                 'profiles': self.subCs
                }
         image, _ = pyprofit.make_model(profit_model)
+        ny,nx=shape
+        self.shape = shape
+        image = np.zeros(shape,dtype=float)
+        xaxis = np.arange(nx)
+        yaxis = np.arange(ny)
+        xmesh, ymesh = np.meshgrid(xaxis, yaxis)
+        for key in self.subCs:
+            self.mass_map[key]=[]
+            for loop in range(len(self.subCs[key])):
+                params = self.subCs[key][loop]
+                profit_model = {'width':  nx,
+                    'height': ny,
+                    'magzero': magzero,
+                    'psf': convolve_func,
+                    'profiles': {key:[params]}
+                   }
+                mass_map, _ = pyprofit.make_model(profit_model)
+                mass_map = np.array(mass_map)
+                mass_map = np.array(mass_map.tolist())
+                self.mass_map[key].append(mass_map)
+                image += mass_map
+                r = np.sqrt( (xmesh+0.5 - self.subCs[key][loop]['xcen'])**2. + (ymesh+0.5 - self.subCs[key][loop]['ycen'])**2.)
+                self.ageparams[key][loop].update({'age_map' : Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])})
+                self.Zparams[key][loop].update({'Z_map' : Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])})
+        #print (self.Zparams)
         return image
+
     def generate_SED_IFU(self,shape,convolve_func,wavelength):
         '''
         gemerate the SED IFU for a galaxy object
@@ -171,4 +210,66 @@ class galaxy(object):
                     for loopx in range(nx):
                         sub_IFU[:,loopy,loopx] = sed_bc03(wavelength, Z_map[loopy][loopx], age_map[loopy][loopx], np.log10(mass_map[loopy][loopx]))
                 tot_IFU += sub_IFU
+
         return tot_IFU
+
+    def generate_image(self,band,convolve_func,inte_step=10):
+        filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
+        resp = Table.read(filterpath + band,format='ascii')
+        ny = self.shape[0]
+        nx = self.shape[1]
+        filter_x=resp['col1']
+        filter_y=resp['col2']
+        tminx = np.min(filter_x)
+        tmaxx = np.max(filter_x)
+        interX = np.linspace(tminx,tmaxx,100)
+        f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
+        ax=trapz(f2(interX),x=interX)
+        r_grid = np.linspace(0.,np.sqrt(nx*ny/np.pi),inte_step)
+        totalflux = np.zeros(self.shape,dtype=float)
+        #print (r_grid)
+        for key in self.subCs:
+            for loop in range(len(self.subCs[key])):
+                agelist = []
+                fratio_age = []
+                Zlist = []
+                fratio_Z = []
+                for loopr in range(inte_step):
+                    r_age = Cal_map(r_grid[loopr],self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
+                    r_Z = Cal_map(r_grid[loopr],self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
+                    agelist.append(r_age)
+                    Zlist.append(r_Z)
+                    #print (interX,Zlist[0], r_age)
+
+                    #print (agelist)
+                    centerSED = sed_bc03(interX, Zlist[0], r_age, 0.)
+                    flux = trapz(centerSED*f2(interX),x=interX)/ax
+                    fratio_age.append(flux)
+                    centerSED = sed_bc03(interX, r_Z, agelist[0], 0.)
+                    flux = trapz(centerSED*f2(interX),x=interX)/ax
+                    fratio_Z.append(flux)
+                    if loopr == 0:
+                        flux_band = flux
+                fratio_age = np.array(fratio_age)/flux_band
+                fratio_Z = np.array(fratio_Z)/flux_band
+                #print (fratio_Z)
+                f_age = np.interp(self.ageparams[key][loop]['age_map'],np.array(agelist),fratio_age)
+                f_Z = np.interp(self.Zparams[key][loop]['Z_map'],np.array(Zlist),fratio_Z)
+                #print (f_Z(self.Zparams[key][loop]['Z_map']))
+                totalflux += flux_band*self.mass_map[key][loop]*f_age*f_Z
+                #print (totalflux)
+        return convolve_fft(totalflux,convolve_func)
+
+
+    class AGN(object):
+        '''
+        the AGN object
+        with physical subcomponents and parameters
+        '''
+        def __init__(self,M_BH=1e9,Ledd=0.1,astar=0.):
+            '''
+            galaxy object is initialed from a given mass
+            '''
+            self.M_BH = M_BH
+            self.Ledd=Ledd
+            self.astar = astar

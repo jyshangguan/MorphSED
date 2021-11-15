@@ -1,9 +1,10 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
-from .utils import *
+#from .utils import *
 
 __all__ = ['sed_bc03']
 
+package_path='/Users/liruancun/Works/GitHub/MorphSED/morphsed'
 sed_data = np.load('{0}/templates/sed_bc03_chab.npz'.format(package_path))
 points = (sed_data['mt'], sed_data['age'], sed_data['wave'])
 intp_bc03 = RegularGridInterpolator(points, sed_data['sed'])
