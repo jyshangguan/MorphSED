@@ -31,7 +31,7 @@ def sed_bc03(wave, z, age, logMs=0):
     flux : 1D array
         SED at given wavelength, units: erg/s/cm^2/Hz.
     '''
-    flux = intp_bc03((z, age, wave)) * 10**logMs
+    flux = intp_bc03((z, age, wave)) * 10**logMs/wave
     return flux
 
 def get_AGN_SED(x, logM,logMdot,spin,C_unit):

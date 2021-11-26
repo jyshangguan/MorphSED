@@ -288,8 +288,8 @@ class AGN(object):
         '''
         filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
         resp = Table.read(filterpath + band,format='ascii')
-        ny = self.shape[0]
-        nx = self.shape[1]
+        ny = shape[0]
+        nx = shape[1]
         filter_x=resp['col1']
         filter_y=resp['col2']
         tminx = np.min(filter_x)
@@ -301,7 +301,8 @@ class AGN(object):
         flux_band = trapz(agnsed*f2(interX),x=interX)/ax
         magzero = 18.
         mag = -2.5*np.log10(flux_band)+magzero
-        psfparams.update('mag':mag)
+        #print (mag)
+        psfparams.update({'mag':mag})
         profit_model = {'width':  nx,
             'height': ny,
             'magzero': magzero,
@@ -309,4 +310,4 @@ class AGN(object):
             'profiles': {psftype:[psfparams]}
            }
         agn_map, _ = pyprofit.make_model(profit_model)
-        return agn_map
+        return np.array(agn_map)
