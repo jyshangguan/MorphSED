@@ -7,7 +7,7 @@ from astropy.table import Table
 from scipy.interpolate import interp1d
 import sys
 sys.path.append('/Users/liruancun/Works/GitHub/MorphSED/morphsed/')
-from sed_interp import sed_bc03
+from sed_interp import sed_bc03,get_AGN_SED
 
 '''
 "allbands":
@@ -240,7 +240,6 @@ class Galaxy(object):
                     agelist.append(r_age)
                     Zlist.append(r_Z)
                     #print (interX,Zlist[0], r_age)
-
                     #print (agelist)
                     centerSED = sed_bc03(interX, Zlist[0], r_age, 0.)
                     flux = trapz(centerSED*f2(interX),x=interX)/ax
@@ -266,10 +265,48 @@ class Galaxy(object):
         the AGN object
         with physical subcomponents and parameters
         '''
-        def __init__(self,M_BH=1e9,Ledd=0.1,astar=0.):
+        def __init__(self,logM_BH=8.,logLedd=-1.,astar=0.):
             '''
             galaxy object is initialed from a given mass
             '''
-            self.M_BH = M_BH
-            self.Ledd=Ledd
+            self.logM_BH = logM_BH
+            self.logLedd=logLedd
             self.astar = astar
+
+        def generate_image(self, shape,band, convolve_func, psfparams, psftype='pointsource'):
+            '''
+            Parameters:
+            shape: (y,x) of the output image
+
+            band: band of the output image
+
+            convolve_func: 2D array, the shape of empirical PSF
+
+            {psftype: [psfparams]}: a dict, the point spread function
+            eg.  {'pointsource': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
+                 {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
+            '''
+            filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
+            resp = Table.read(filterpath + band,format='ascii')
+            ny = self.shape[0]
+            nx = self.shape[1]
+            filter_x=resp['col1']
+            filter_y=resp['col2']
+            tminx = np.min(filter_x)
+            tmaxx = np.max(filter_x)
+            interX = np.linspace(tminx,tmaxx,100)
+            f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
+            ax=trapz(f2(interX),x=interX)
+            agnsed = get_AGN_SED(interX,self.logM_BH,self.logLedd,self.astar,1.)
+            flux_band = trapz(agnsed*f2(interX),x=interX)/ax
+            magzero = 18.
+            mag = -2.5*np.log10(flux_band)+magzero
+            psfparams.update('mag':mag)
+            profit_model = {'width':  nx,
+                'height': ny,
+                'magzero': magzero,
+                'psf': convolve_func,
+                'profiles': {psftype:[psfparams]}
+               }
+            agn_map, _ = pyprofit.make_model(profit_model)
+            return agn_map
