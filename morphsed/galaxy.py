@@ -7,7 +7,7 @@ from astropy.table import Table
 from scipy.interpolate import interp1d
 import sys
 sys.path.append('/Users/liruancun/Works/GitHub/MorphSED/morphsed/')
-from sed_interp import sed_bc03,get_AGN_SED
+import sed_interp as SEDs
 
 '''
 "allbands":
@@ -78,15 +78,42 @@ def Cal_map(r, type, paradic):
         if case('exp'):
             return (paradic['in']-paradic['out'])*np.exp(-r/paradic['k'])+paradic['out']
             break
+        if case('const'):
+            return np.ones_like(r,dtype=float)*paradic['value']
+            break
         if case():
             raise ValueError("Unidentified method for calculate age or Z map")
+
+def Cal_gradient_map(r_grid, r_map, method, type, paradic, flux_band, f2, interX, ax, **kwargs):
+    if type =='const':
+        return np.ones_like(r_map,dtype=float)
+    else:
+        fratio_list = []
+        targe_para = Cal_map(r_grid,type,paradic)
+        for loopr in range(r_grid):
+            if method =='age':
+                centerSED = SEDs.get_host_SED(interX, 0., kwargs['f_cont_zero'], targe_para[loopr], kwargs['Z_zero'],kwargs['Av_zero'],1.)
+            elif method =='f_cont':
+                centerSED = SEDs.get_host_SED(interX, 0., targe_para[loopr], kwargs['age_zero'], kwargs['Z_zero'],kwargs['Av_zero'],1.)
+            elif method =='Z':
+                centerSED = SEDs.get_host_SED(interX, 0., kwargs['f_cont_zero'], kwargs['age_zero'], targe_para[loopr],kwargs['Av_zero'],1.)
+            elif method =='Av':
+                centerSED = SEDs.get_host_SED(interX, 0., kwargs['f_cont_zero'], kwargs['age_zero'], kwargs['Z_zero'],targe_para[loopr],1.)
+            else:
+                raise ValueError("Unidentified method for calculate gradient map")
+            flux = trapz(centerSED*f2(interX),x=interX)/ax
+            fratio_list.append(flux/flux_band)
+        fratio_list = np.array(fratio_list)
+        targe_map = Cal_map(r_map,type,paradic)
+        gradient_map = np.interp(targe_map,np.array(targe_para),fratio_age)
+        return gradient_map
 
 class Galaxy(object):
     '''
     the galaxy object
     with physical subcomponents and parameters
     '''
-    def __init__(self,mass=1e9):
+    def __init__(self, mass=1e9, z=0., ebv_G=0.):
         '''
         galaxy object is initialed from a given mass
         '''
@@ -95,15 +122,20 @@ class Galaxy(object):
         self.subCs = {}
         self.ageparams={}
         self.Zparams={}
+        self.f_cont={}
+        self.Avparams={}
         self.maglist = []
         self.imshape = None
         self.mass_map = {}
+        self.r_map = {}
+        self.redshift = z
+        self.ebv_G = ebv_G
     def reset_mass(self,mass):
         '''
         reset the mass of a galaxy object
         '''
         self.mass = mass
-    def add_subC(self,Pro_names,params,ageparam,Zparam):
+    def add_subC(self,Pro_names,params,ageparam,Zparam,f_cont,Avparam):
         '''
         To add a subcomponent for a galaxy object
 
@@ -116,9 +148,13 @@ class Galaxy(object):
 
         ageparam: a dictionary of the age dsitribution parameters for this subcomponent
         e.g. {'type': 'linear', 'paradic': {'k': -0.05, 'b': 9.0}}
+             {'type': 'const', 'paradic': {'value': 5.0}}
 
         Zparam: a dictionary of the matallicity dsitribution parameters for this subcomponent
         e.g. {'type': 'linear', 'paradic': {'k': 0.0, 'b': 0.02}}
+
+        f_cont: a dictionary of the fraction of starformation dsitribution parameters for this subcomponent
+        between [0.,1.], fraction of starformation
         '''
         params['mag']=params.pop("frac")
         params['mag'] = 10. - 2.5*np.log10(params['mag'])
@@ -126,11 +162,16 @@ class Galaxy(object):
             self.subCs[Pro_names].append(params)
             self.ageparams[Pro_names].append(ageparam)
             self.Zparams[Pro_names].append(Zparam)
+            self.Avparams[Pro_names].append(Avparam)
+            self.f_cont[Pro_names].append(f_cont)
         else:
             self.subCs.update({Pro_names : [params]})
             self.ageparams.update({Pro_names : [ageparam]})
             self.Zparams.update({Pro_names : [Zparam]})
+            self.Avparams.update({Pro_names : [Avparam]})
+            self.f_cont.update({Pro_names : [f_cont]})
             self.mass_map.update({Pro_names : []})
+            self.r_map.update({Pro_names : []})
         #print (self.mass_map)
         self.maglist.append(params['mag'])
         #print (self.maglist)
@@ -140,6 +181,9 @@ class Galaxy(object):
         gemerate the mass distribution map for a galaxy object
         shape: return 2D image shape
         convolve_func: a 2D kernel if convolution is needed
+        -----
+        Caution, in future, the r_map calculation can be used as elliptical_func
+        -----
         '''
         mags = np.array(self.maglist)
         magzero = 2.5*np.log10(self.mass/np.sum(np.power(10,mags/(-2.5))))
@@ -172,17 +216,19 @@ class Galaxy(object):
                 self.mass_map[key].append(mass_map)
                 image += mass_map
                 r = np.sqrt( (xmesh+0.5 - self.subCs[key][loop]['xcen'])**2. + (ymesh+0.5 - self.subCs[key][loop]['ycen'])**2.)
-                self.ageparams[key][loop].update({'age_map' : Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])})
-                self.Zparams[key][loop].update({'Z_map' : Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])})
+                self.r_map[key].append(r)
+                #self.ageparams[key][loop].update({'age_map' : Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])})
+                #self.Zparams[key][loop].update({'Z_map' : Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])})
         #print (self.Zparams)
         return image
 
-    def generate_SED_IFU(self,shape,convolve_func,wavelength):
+    def generate_SED_IFU(self,shape,convolve_func,wavelength,resolution=10.):
         '''
         gemerate the SED IFU for a galaxy object
         shape: return 2D spatial shape
         convolve_func: a 2D kernel if convolution is needed
         wavelength: 1D array, the wavelength sample
+        resolution: logr grid to sample SED
         '''
         ny = shape[0]
         nx = shape[1]
@@ -208,9 +254,8 @@ class Galaxy(object):
                 Z_map = Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
                 for loopy in range(ny):
                     for loopx in range(nx):
-                        sub_IFU[:,loopy,loopx] = sed_bc03(wavelength, Z_map[loopy][loopx], age_map[loopy][loopx], np.log10(mass_map[loopy][loopx]))
+                        sub_IFU[:,loopy,loopx] = SEDs.get_host_SED(wavelength, Z_map[loopy][loopx], age_map[loopy][loopx], np.log10(mass_map[loopy][loopx]))
                 tot_IFU += sub_IFU
-
         return tot_IFU
 
     def generate_image(self,band,convolve_func,inte_step=10):
@@ -222,40 +267,35 @@ class Galaxy(object):
         filter_y=resp['col2']
         tminx = np.min(filter_x)
         tmaxx = np.max(filter_x)
-        interX = np.linspace(tminx,tmaxx,100)
+        interX = np.linspace(tminx,tmaxx,np.max([100,len(filter_x)]))
         f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
         ax=trapz(f2(interX),x=interX)
-        r_grid = np.linspace(0.,np.sqrt(nx*ny/np.pi),inte_step)
+        r_grid = np.linspace(0.,0.5*np.sqrt(nx**2+ny**2),inte_step)
         totalflux = np.zeros(self.shape,dtype=float)
         #print (r_grid)
+        interX_intrin = interX/(1.+self.redshift)
         for key in self.subCs:
             for loop in range(len(self.subCs[key])):
-                agelist = []
-                fratio_age = []
-                Zlist = []
-                fratio_Z = []
-                for loopr in range(inte_step):
-                    r_age = Cal_map(r_grid[loopr],self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
-                    r_Z = Cal_map(r_grid[loopr],self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
-                    agelist.append(r_age)
-                    Zlist.append(r_Z)
-                    #print (interX,Zlist[0], r_age)
-                    #print (agelist)
-                    centerSED = sed_bc03(interX, Zlist[0], r_age, 0.)
-                    flux = trapz(centerSED*f2(interX),x=interX)/ax
-                    fratio_age.append(flux)
-                    centerSED = sed_bc03(interX, r_Z, agelist[0], 0.)
-                    flux = trapz(centerSED*f2(interX),x=interX)/ax
-                    fratio_Z.append(flux)
-                    if loopr == 0:
-                        flux_band = flux
-                fratio_age = np.array(fratio_age)/flux_band
-                fratio_Z = np.array(fratio_Z)/flux_band
-                #print (fratio_Z)
-                f_age = np.interp(self.ageparams[key][loop]['age_map'],np.array(agelist),fratio_age)
-                f_Z = np.interp(self.Zparams[key][loop]['Z_map'],np.array(Zlist),fratio_Z)
-                #print (f_Z(self.Zparams[key][loop]['Z_map']))
-                totalflux += flux_band*self.mass_map[key][loop]*f_age*f_Z
+                age_zero = Cal_map(0.,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
+                Z_zero = Cal_map(0.,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
+                f_cont_zero = Cal_map(0.,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
+                Av_zero = Cal_map(0.,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
+                centerSED = SEDs.get_host_SED(interX_intrin, 0., f_cont_zero, age_zero, Z_zero, Av_zero, 1.)
+                flux_intrin = trapz(centerSED*f2(interX_intrin),x=interX_intrin)/ax
+                x, sed_obs = SEDs.sed_to_obse(interX_intrin,centerSED,self.redshift,self.ebv_G)
+                flux_band = trapz(sed_obs*f2(interX),x=interX)/ax
+                age_gradient = Cal_gradient_map(r_grid, self.r_map[key][loop], 'age', self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic']
+                                , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
+                Z_gradient = Cal_gradient_map(r_grid, self.r_map[key][loop], 'Z', self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic']
+                                , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
+                f_cont_gradient = Cal_gradient_map(r_grid, self.r_map[key][loop], 'f_cont', self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic']
+                                , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
+                Av_gradient = Cal_gradient_map(r_grid, self.r_map[key][loop], 'Av', self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic']
+                                , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
+                #print (age_zero,Z_zero,f_cont_zero,Av_zero,Av_gradient)
+                totalflux += flux_band*self.mass_map[key][loop]*age_gradient*Z_gradient*f_cont_gradient*Av_gradient
+                #print (self.mass_map[key][loop])
+                #print (np.sum(self.mass_map[key][loop]))
                 #print (totalflux)
         return convolve_fft(totalflux,convolve_func)
 
@@ -265,15 +305,18 @@ class AGN(object):
     the AGN object
     with physical subcomponents and parameters
     '''
-    def __init__(self,logM_BH=8.,logLedd=-1.,astar=0.):
+    def __init__(self,logM_BH=8.,logLedd=-1.,astar=0., Av=0., z=0., ebv_G=0.):
         '''
         galaxy object is initialed from a given mass
         '''
         self.logM_BH = logM_BH
         self.logLedd=logLedd
         self.astar = astar
+        self.Av = Av
+        self.redshift = z
+        self.ebv_G = ebv_G
 
-    def generate_image(self, shape,band, convolve_func, psfparams, psftype='pointsource'):
+    def generate_image(self, shape,band, convolve_func, psfparams, psftype='psf'):
         '''
         Parameters:
         shape: (y,x) of the output image
@@ -283,7 +326,7 @@ class AGN(object):
         convolve_func: 2D array, the shape of empirical PSF
 
         {psftype: [psfparams]}: a dict, the point spread function
-        eg.  {'pointsource': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
+        eg.  {'psf': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
              {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
         '''
         filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
@@ -297,7 +340,9 @@ class AGN(object):
         interX = np.linspace(tminx,tmaxx,100)
         f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
         ax=trapz(f2(interX),x=interX)
-        agnsed = get_AGN_SED(interX,self.logM_BH,self.logLedd,self.astar,1.)
+        waveintrin = interX/(1.+self.redshift)
+        agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,self.Av,1.)
+        x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         flux_band = trapz(agnsed*f2(interX),x=interX)/ax
         magzero = 18.
         mag = -2.5*np.log10(flux_band)+magzero
