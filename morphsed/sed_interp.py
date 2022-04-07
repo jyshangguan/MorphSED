@@ -2,6 +2,7 @@ import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 import extinction
 from astropy.convolution import Gaussian1DKernel,convolve_fft
+import os
 #from .utils import *
 
 #__all__ = ['get_host_SED']
@@ -112,30 +113,31 @@ SII_6731={
 
 ALLLINES = [NeV,NeVI,OII,NeIII,Hg,Hb,Ha,OIII_4959,OIII_5007,HeI,NaD,OI_6302,NII_6549,NII_6583,SII_6716,SII_6731]
 
+if "MorphSED_DATA_PATH" not in os.environ:
+    raise Exception('You should set environment varialbe `MorphSED_DATA_PATH` in your .bashrc (or rc file for other shells)')
+else:
+    DATA_PATH=os.environ.get('MorphSED_DATA_PATH')
 
-template_path='/Users/liruancun/Works/PG'
-
-
-sed_data = np.load('{0}/templates/thin_disk_lowr.npz'.format(template_path))
+sed_data = np.load('{0}/templates/thin_disk_lowr.npz'.format(DATA_PATH))
 points = (sed_data['spin'], sed_data['logMdot'], sed_data['logM'], sed_data['wave'])
 intp_thindisk = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
-sed_data = np.load('{0}/templates/host_conti.npz'.format(template_path))
+sed_data = np.load('{0}/templates/host_conti.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_cont = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
-sed_data = np.load('{0}/templates/host_inst.npz'.format(template_path))
+sed_data = np.load('{0}/templates/host_inst.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_inst = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
-sed_data = np.load('{0}/templates/host_conti_hires.npz'.format(template_path))
+sed_data = np.load('{0}/templates/host_conti_hires.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_hres_cont = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
-sed_data = np.load('{0}/templates/host_inst_hires.npz'.format(template_path))
+sed_data = np.load('{0}/templates/host_inst_hires.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_hres_inst = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
-wave_temp = np.loadtxt('{0}/templates/wave_hires.txt'.format(template_path))
+wave_temp = np.loadtxt('{0}/templates/wave_hires.txt'.format(DATA_PATH))
 
 def gaussian(x, amp, cen, wid):
     return (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x-cen)**2 / (2*wid**2))
