@@ -18,4 +18,6 @@ This is a test project
 you should set these env variables
 ```
 export MorphSED_DATA_PATH=<path-to-MorphSED-DATA>
-```
+
+# the templates are in the directory of `MorphSED_DATA_PATH/templates/*`
+
