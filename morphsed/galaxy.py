@@ -222,41 +222,6 @@ class Galaxy(object):
         #print (self.Zparams)
         return image
 
-    def generate_SED_IFU(self,shape,convolve_func,wavelength,resolution=10.):
-        '''
-        gemerate the SED IFU for a galaxy object
-        shape: return 2D spatial shape
-        convolve_func: a 2D kernel if convolution is needed
-        wavelength: 1D array, the wavelength sample
-        resolution: logr grid to sample SED
-        '''
-        ny = shape[0]
-        nx = shape[1]
-        mags = np.array(self.maglist)
-        magzero = 2.5*np.log10(self.mass/np.sum(np.power(10,mags/(-2.5))))
-        tot_IFU = np.zeros((len(wavelength),ny,nx))
-        for key in self.subCs:
-            for loop in range(len(self.subCs[key])):
-                params = self.subCs[key][loop]
-                profit_model = {'width':  nx,
-                    'height': ny,
-                    'magzero': magzero,
-                    'psf': convolve_func,
-                    'profiles': {key:[params]}
-                   }
-                mass_map, _ = pyprofit.make_model(profit_model)
-                sub_IFU = np.zeros((len(wavelength),ny,nx))
-                xaxis = np.arange(nx)
-                yaxis = np.arange(ny)
-                xmesh, ymesh = np.meshgrid(xaxis, yaxis)
-                r = np.sqrt( (xmesh+0.5 - self.subCs[key][loop]['xcen'])**2. + (ymesh+0.5 - self.subCs[key][loop]['ycen'])**2.)
-                age_map = Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
-                Z_map = Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
-                for loopy in range(ny):
-                    for loopx in range(nx):
-                        sub_IFU[:,loopy,loopx] = SEDs.get_host_SED(wavelength, Z_map[loopy][loopx], age_map[loopy][loopx], np.log10(mass_map[loopy][loopx]))
-                tot_IFU += sub_IFU
-        return tot_IFU
 
     def generate_image(self,band,convolve_func,inte_step=10):
         filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
