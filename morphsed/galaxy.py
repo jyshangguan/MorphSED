@@ -1,4 +1,3 @@
-import ezgal
 import pyprofit
 from scipy.integrate import trapz
 from astropy.convolution import convolve_fft
@@ -6,8 +5,8 @@ import numpy as np
 from astropy.table import Table
 from scipy.interpolate import interp1d
 import sys
-sys.path.append('/Users/liruancun/Works/GitHub/MorphSED/morphsed/')
-import sed_interp as SEDs
+from . import sed_interp as SEDs
+from pathlib import Path
 
 '''
 "allbands":
@@ -20,6 +19,7 @@ import sed_interp as SEDs
     'wfpc2_f555w', 'wfc3_f438w', 'wfc3_f105w', 'newfirm_h', 'wfc3_f160w', 'j', 'v', 'acs_f775w', 'wfpc2_f606w', 'wise_ch2',
     'acs_f814w', 'wfc3_f850lp', 'b', 'wise_ch3', 'wise_ch4', 'acs_f850lp'
 '''
+filterpath = Path(__file__).parent / 'data/filters'
 
 class switch(object):
     def __init__(self, value):
@@ -49,10 +49,8 @@ def IFU_to_img(IFU,wave,band,step=0.5):
     wave:  1D array shows the sampled wavelength
     band:  choose one from "all bands"
     step:  float, wavelength accuracy to integrate flux
-    filterpath = where the ezgal installed
     '''
-    filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
-    resp = Table.read(filterpath + band,format='ascii')
+    resp = Table.read(filterpath / band,format='ascii')
     filter_x=resp['col1']
     filter_y=resp['col2']
     tminx = np.max([np.min(filter_x),np.min(wave)])
@@ -224,8 +222,7 @@ class Galaxy(object):
 
 
     def generate_image(self,band,convolve_func,inte_step=10):
-        filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
-        resp = Table.read(filterpath + band,format='ascii')
+        resp = Table.read(filterpath / band,format='ascii')
         ny = self.shape[0]
         nx = self.shape[1]
         filter_x=resp['col1']
@@ -294,8 +291,7 @@ class AGN(object):
         eg.  {'psf': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
              {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
         '''
-        filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
-        resp = Table.read(filterpath + band,format='ascii')
+        resp = Table.read(filterpath / band,format='ascii')
         ny = shape[0]
         nx = shape[1]
         filter_x=resp['col1']

@@ -1,4 +1,3 @@
-import ezgal
 import pyprofit
 from scipy.integrate import trapz
 from astropy.convolution import convolve_fft
@@ -7,10 +6,7 @@ from astropy.table import Table
 from scipy.interpolate import interp1d
 from scipy.interpolate import RegularGridInterpolator
 import sys,extinction
-sys.path.append('/Users/liruancun/Works/GitHub/MorphSED/morphsed/')
-import sed_interp as SEDs
-
-
+from . import sed_interp as SEDs
 
 class switch(object):
     def __init__(self, value):

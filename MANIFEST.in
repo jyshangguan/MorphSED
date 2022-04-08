@@ -1,0 +1,14 @@
+include README.rst
+include CHANGES.rst
+include setup.cfg
+include LICENSE.md
+include pyproject.toml
+
+recursive-include morphsed *.pyx *.c *.pxd
+recursive-include examples *
+
+prune build
+prune docs/_build
+prune docs/api
+
+global-exclude *.pyc *.o
