@@ -78,7 +78,7 @@ class Galaxy3D(object):
         reset the mass of a galaxy object
         '''
         self.mass = mass
-    def add_subC(self,Pro_names,params,ageparam,Zparam,f_cont,Avparam,sigmaparam):
+    def add_subC(self,Pro_names,params,ageparam,Zparam,f_cont,Avparam,sigmaparam={'type': "const", 'paradic':{'value': 100}}):
         '''
         To add a subcomponent for a galaxy object
 
@@ -161,13 +161,6 @@ class Galaxy3D(object):
         '''
         mags = np.array(self.maglist)
         magzero = 2.5*np.log10(self.mass/np.sum(np.power(10,mags/(-2.5))))
-        profit_model = {'width':  shape[1],
-                'height': shape[0],
-                'magzero': magzero,
-                'psf': convolve_func,
-                'profiles': self.subCs
-               }
-        image, _ = pyprofit.make_model(profit_model)
         ny,nx=shape
         self.imshape = shape
         image = np.zeros(shape,dtype=float)
@@ -191,7 +184,7 @@ class Galaxy3D(object):
                 image += mass_map
         return image
 
-    def generate_SED_IFU(self,wavelength,resolution=10):
+    def generate_SED_IFU(self,wavelength,resolution=10,highres=True):
         '''
         gemerate the SED IFU for a galaxy object
         ------
@@ -222,8 +215,11 @@ class Galaxy3D(object):
                     Z = Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
                     f_cont = Cal_map(r,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                     Av = Cal_map(r,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
-                    sigma = Cal_map(r,self.sigmaparams[key][loop]['type'],self.sigmaparams[key][loop]['paradic'])
-                    seds_total = SEDs.get_host_SED_3D(waveintrin, 0., f_cont, age, Z, sigma, Av, 1.)
+                    if highres:
+                        sigma = Cal_map(r,self.sigmaparams[key][loop]['type'],self.sigmaparams[key][loop]['paradic'])
+                        seds_total = SEDs.get_host_SED_3D(waveintrin, 0., f_cont, age, Z, sigma, Av, 1.)
+                    else:
+                        seds_total = SEDs.get_host_SED(waveintrin, 0., f_cont, age, Z, Av, 1.)
                     SED_rgrid.append(seds_total/dimfac)
                 intp_sed = RegularGridInterpolator((r_grid,wavelarge), np.array(SED_rgrid),bounds_error=False,fill_value=0.)
                 self.subCs[key][loop]['intp']=intp_sed

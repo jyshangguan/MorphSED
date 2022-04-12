@@ -3,6 +3,7 @@ from scipy.interpolate import RegularGridInterpolator
 import extinction
 from astropy.convolution import Gaussian1DKernel,convolve_fft
 import os
+from astropy.table import Table, Column
 #from .utils import *
 
 #__all__ = ['get_host_SED']
@@ -15,103 +16,6 @@ C_ms=1.9891*1e30   # kg
 L_edd=1.25e38
 tl2=2*np.sqrt(2*np.log(2))      # fwhm = tl2 * sigma
 
-NeV={
-    'name' : 'NeV',
-    'wave' : 3346.79,
-    'type' : 'N',
-}
-
-NeVI={
-    'name' : 'NeVI',
-    'wave' : 3426.85,
-    'type' : 'N',
-}
-
-OII={
-    'name' : 'OII',
-    'wave' : 3729.875,
-    'type' : 'N',
-}
-
-NeIII={
-    'name' : 'NeIII',
-    'wave' : 3869.81,
-    'type' : 'N',
-}
-
-Hg={
-    'name' : 'Hg',
-    'wave' : 4341.68,
-    'type' : 'N',
-}
-
-Hb={
-    'name' : 'Hb',
-    'wave' : 4862.68,
-    'type' : 'Nabs',
-}
-
-OIII_4959={
-    'name' : 'OIII_4959',
-    'wave' : 4960.295,
-    'type' : 'N',
-}
-
-OIII_5007={
-    'name' : 'OIII_5007',
-    'wave' : 5008.24,
-    'type' : 'N',
-}
-
-HeI={
-    'name' : 'HeI',
-    'wave' : 5877.3,
-    'type' : 'N',
-}
-
-NaD={
-    'name' : 'NaD',
-    'wave' : 5892.9,
-    'type' : 'abs',
-}
-
-OI_6302={
-    'name' : 'OI_6302',
-    'wave' :  6302.05,
-    'type' : 'N',
-}
-
-NII_6549={
-    'name' : 'NII_6549',
-    'wave' : 6549.86,
-    'type' : 'N',
-}
-
-Ha={
-    'name' : 'Ha',
-    'wave' : 6564.61,
-    'type' : 'Nabs',
-}
-
-NII_6583={
-    'name' : 'NII_6583',
-    'wave' : 6585.27,
-    'type' : 'N',
-}
-
-SII_6716={
-    'name' : 'SII_6716',
-    'wave' : 6718.29,
-    'type' : 'N',
-}
-
-SII_6731={
-    'name' : 'SII_6731',
-    'wave' : 6732.67,
-    'type' : 'N',
-}
-
-ALLLINES = [NeV,NeVI,OII,NeIII,Hg,Hb,Ha,OIII_4959,OIII_5007,HeI,NaD,OI_6302,NII_6549,NII_6583,SII_6716,SII_6731]
 
 if "MorphSED_DATA_PATH" not in os.environ:
     raise Exception('You should set environment varialbe `MorphSED_DATA_PATH` in your .bashrc (or rc file for other shells)')
@@ -121,6 +25,14 @@ else:
 sed_data = np.load('{0}/templates/thin_disk_lowr.npz'.format(DATA_PATH))
 points = (sed_data['spin'], sed_data['logMdot'], sed_data['logM'], sed_data['wave'])
 intp_thindisk = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
+
+sed_data = np.load('{0}/templates/BLRDC.npz'.format(DATA_PATH))
+points = (sed_data['spin'], sed_data['logM'], sed_data['logMdot'], sed_data['wave'])
+intp_BLRDC = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
+
+sed_data = np.load('{0}/templates/BLRTOT.npz'.format(DATA_PATH))
+points = (sed_data['spin'], sed_data['logM'], sed_data['logMdot'], sed_data['wave'])
+intp_BLRTOT = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
 sed_data = np.load('{0}/templates/host_conti.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
@@ -149,6 +61,40 @@ def gaussian3D(x, amp, cen, wid):
     for loop in range(tlen):
         IFU[loop,:,:] = (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x[loop]-cen)**2 / (2*wid**2))
     return IFU
+
+feii_template_op = Table.read('{0}/templates/irontemplate_op_new.ipac'.format(DATA_PATH),format='ascii')
+feii_template_uv = Table.read('{0}/templates/irontemplate_uv.ipac'.format(DATA_PATH),format='ascii')
+wave_bac = np.genfromtxt('{0}/templates/BLRDC.wavegrid'.format(DATA_PATH), dtype=float, names=None)
+
+def FeII(x,A_uv,A_op,dcen,fwhm):
+    wavemodel = np.append(feii_template_uv['Spectral_axis'],feii_template_op['wave'])
+    fluxmodel = np.append(A_uv*feii_template_uv['Intensity'],A_op*feii_template_op['flux'])
+    if fwhm < 900.:
+        fwhm=910.
+    fwhm = np.sqrt(fwhm**2-900**2)
+    std = fwhm/c/tl2
+    dcenlog = dcen/c
+    referwave = 2500.
+    kersize = np.max([int(std*referwave*5),15])
+    kernel = Gaussian1DKernel(referwave*std,x_size=kersize)
+    kernel.normalize()
+    mask = (wavemodel > (1.-5*std-dcenlog)*x.min())&(wavemodel < (1.+5*std+dcenlog)*x.max())
+    wave = wavemodel[mask]
+    flux = fluxmodel[mask]
+    return conv_spec(x,wave,flux,kernel.array,dcenlog,referwave)
+
+def BaC(x,cf,logM,logMdot,spin,dcen,fwhm):
+    std = fwhm/c/tl2
+    dcenlog = dcen/c
+    referwave = 2500.
+    kersize = np.max([int(std*referwave*5),15])
+    kernel = Gaussian1DKernel(referwave*std,x_size=kersize)
+    kernel.normalize()
+    mask = (wave_bac > (1.-5*std-dcenlog)*x.min())&(wave_bac < (1.+5*std+dcenlog)*x.max())
+    wave = wave_bac[mask]
+    flux = 10**intp_BLRDC((spin,logM,logMdot,wave))
+    return cf*conv_spec(x,wave,flux,kernel.array,dcenlog,referwave)
+
 
 def conv_spec(x, wave, flux, kernel, dcenlog, referwave):
     '''
@@ -228,6 +174,10 @@ def get_host_SED(x, logM, f_cont, age, Z, Av, C_unit):
     # Z : metalicity, [0.001,0.04], 0.02 for solar
     # Av : V Attenuation
     # Return: restframe L_lambda in ergs/s
+    if f_cont < 0.:
+        f_cont = 0.
+    elif f_cont > 1. :
+        f_cont = 1.
     M=10**logM
     age_yr = age*1e9
     M_cont = M*f_cont
@@ -242,19 +192,15 @@ def get_host_SED(x, logM, f_cont, age, Z, Av, C_unit):
     cm=extinction.ccm89(x,Av,3.1)/2.5
     return fluxmodel/(10**cm)
 
-def get_AGN_SED(x, logM,logMdot,spin,Av,C_unit):
+def get_AGN_SED(x, logM,logMdot,spin,C_unit):
     # derive a SED of standard thin disk
     # x:       wavelength, in range[125,24700]
     # logM:    log10(M_BH), in range[5,10]
     # logMdot: log10(dotM), in range[-4,2]
     # spin:    BH spin, in range[0,0.99]
     # Return: restframe L_lambda in ergs/s
-    fluxmodel=C_unit*intp_thindisk((spin, logMdot, logM, x))
-    if Av == 0.:
-        return fluxmodel
-    else:
-        cm=extinction.ccm89(x,Av,3.1)/2.5
-        return fluxmodel/(10**cm)
+    fluxmodel=100.*C_unit*intp_thindisk((spin, logMdot, logM, x))
+    return fluxmodel
 
 def sed_to_obse(x,y,z,ebv):
     xnew = x.copy()

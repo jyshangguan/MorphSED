@@ -26,6 +26,7 @@ import matplotlib.colors as colors
 from photutils import EPSFBuilder
 
 __all__ = ['image', 'image_atlas']
+tl2=2*np.sqrt(2*np.log(2))
 
 class image(object):
     '''
@@ -42,8 +43,7 @@ class image(object):
     * set_pixel_scales : Set the pixel scales along two axes.
     * set_zero_point : Set magnitude zero point.
     '''
-    def __init__(self, filename=None, hdu=0, unit=None, zero_point=None,
-                 pixel_scales=None, wcs_rotation=None, mask=None, verbose=True):
+    def __init__(self, filename=None, hdu=0, phys_to_image=None, unit=None, zero_point=None, pixel_scales=None, wcs_rotation=None, mask=None, verbose=True,psfFWHM_map=None):
         '''
         Parameters
         ----------
@@ -88,6 +88,64 @@ class image(object):
         self.sources_skycord = None
         self.ss_data = None
         self.PSF = None
+        self.psfFWHM_map=psfFWHM_map
+        self.cut_image = None
+        self.cut_sigma_image = None
+        self.cut_mask_image = None
+        self.coordinates_transfer_para = None
+        self.sky_median = 0.
+
+    def img_cut(self,ra,dec,cutsize,gain='CELL.GAIN',extime='EXPTIME',sigma_clipped=True):
+        #cutsize is arcsec unit
+        #delta_ang point to east direction
+        srcPstXY = self.data.wcs.all_world2pix([ra], [dec], 1)
+        srcXp = srcPstXY[0][0]
+        srcYp = srcPstXY[1][0]
+        srcPstXY = self.data.wcs.all_world2pix([ra+1./60], [dec], 1)
+        srcXpra = srcPstXY[0][0]
+        srcYpra = srcPstXY[1][0]
+        srcPstXY = self.data.wcs.all_world2pix([ra], [dec+1./60], 1)
+        srcXpdec = srcPstXY[0][0]
+        srcYpdec = srcPstXY[1][0]
+        dxra = (srcXpra-srcXp)/60.
+        dyra = (srcYpra-srcYp)/60.
+        dxdec = (srcXpdec-srcXp)/60.
+        dydec = (srcYpdec-srcYp)/60.
+        self.sources_skycord = [srcXp,srcYp]
+        cutsize_int = int(cutsize/self.pixel_scales[0].value)
+        ny,nx=self.data.data.shape
+        minx = np.max([int(srcXp)-cutsize_int,0])
+        maxx = np.min([int(srcXp)+cutsize_int,nx])
+        miny = np.max([int(srcYp)-cutsize_int,0])
+        maxy = np.min([int(srcYp)+cutsize_int,ny])
+        imcut = self.data.data[miny:maxy,minx:maxx]
+        self.cut_image = imcut
+        if sigma_clipped:
+            sky_mean, sky_median, sky_std = sigma_clipped_stats(imcut, sigma=3.0, maxiters=5)
+        else:
+            sky_median = np.nanmedian(imcut)
+            sky_std = np.nanstd(imcut)
+        self.sky_median = sky_median
+        if self.data.mask is not None:
+            self.cut_mask_image = self.data.mask[miny:maxy,minx:maxx]
+        if self.sigma_image is not None:
+            self.cut_sigma_image = self.sigma_image[miny:maxy,minx:maxx]
+        else:
+            if type(gain) is float:
+                GAIN=gain
+            else:
+                GAIN = self.data.meta[gain]
+            if type(extime) is float:
+                expt = extime
+            else:
+                expt = self.data.meta[extime]
+            self.cut_sigma_image = np.sqrt(np.abs(imcut)/GAIN+sky_std**2)
+        vector = [srcXpdec-srcXp,srcYpdec-srcYp]
+        normv = np.sqrt(vector[0]**2+vector[1]**2)
+        delta_ang = np.arcsin((srcYpdec-srcYp)/normv)*180./np.pi
+        self.coordinates_transfer_para = {'x0': srcXp-minx, 'y0': srcYp-miny, 'dxra':dxra, 'dxdec':dxdec,'dyra':dyra,'dydec':dydec,'pixsc':self.pixel_scales[0].value, 'delta_ang':delta_ang}
+        return imcut
+
 
     def get_size(self, units='pixel'):
         '''
@@ -170,8 +228,7 @@ class image(object):
         '''
         return sigma_clipped_stats(self.data.data, mask=self.data.mask, **kwargs)
 
-    def plot(self, stretch='asinh', units='arcsec', vmin=None, vmax=None,
-             a=None, ax=None, plain=False, **kwargs):
+    def plot(self, stretch='asinh', units='arcsec', vmin=None, vmax=None, a=None, ax=None, plain=False, **kwargs):
         '''
         Plot an image.
 
@@ -207,11 +264,9 @@ class image(object):
             ax.set_ylabel(r'$\Delta Y$ ({0})'.format(units), fontsize=24)
         return ax
 
-    def plot_direction(self, ax, xy=(0, 0), len_E=None, len_N=None, color='k', fontsize=20,
-                       linewidth=2, frac_len=0.1, units='arcsec', backextend=0.05):
+    def plot_direction(self, ax, xy=(0, 0), len_E=None, len_N=None, color='k', fontsize=20,linewidth=2, frac_len=0.1, units='arcsec', backextend=0.05):
         '''
         Plot the direction arrow. Only applied to plots using WCS.
-
         Parameters
         ----------
         ax : Axis
@@ -429,6 +484,19 @@ class image(object):
         hdu = fits.open(filepath)
         self.PSF = hdu[0].data
 
+    def gaussian_psf(self, fwhm=None, size=15):
+        '''
+        fwhm should in unit of arcsec
+        '''
+        if fwhm is None:
+            psfFWHM=self.psfFWHM_map[int(self.sources_skycord[1]),int(self.sources_skycord[0])]/self.pixel_scales[0].value
+        else:
+            psfFWHM = fwhm/self.pixel_scales[0].value
+        kernel = Gaussian2DKernel(psfFWHM/tl2, x_size=size, y_size=size)
+        kernel.normalize()
+        self.PSF = np.array(kernel)
+        return self.PSF
+
 class image_atlas(object):
     '''
     Many images.
@@ -498,7 +566,6 @@ class image_atlas(object):
             nsigma = nsigma * np.ones(self.__length,dtype=float)
         for loop in range(self.__length):
             self.image_list[loop].source_detection_individual(self.psfFWHM_list[loop],nsigma=nsigma[loop],sc_key=loop+1)
-
 
     def make_common_catalog(self,CM_separation=2.5,magnification=3.0,applylist=None):
         '''
