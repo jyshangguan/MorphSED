@@ -17,7 +17,7 @@ from astropy.convolution import Gaussian2DKernel
 from astropy.stats import gaussian_fwhm_to_sigma
 from photutils import detect_threshold
 from photutils import detect_sources
-from photutils import source_properties
+from photutils.segmentation import SourceCatalog
 from astropy.table import Table, Column, join, join_skycoord
 from astropy.wcs import WCS
 from astropy.nddata import NDData
@@ -89,6 +89,7 @@ class image(object):
         self.ss_data = None
         self.PSF = None
         self.psfFWHM_map=psfFWHM_map
+        self.psfFWHM_arcsec = None
         self.cut_image = None
         self.cut_sigma_image = None
         self.cut_mask_image = None
@@ -145,7 +146,6 @@ class image(object):
         delta_ang = np.arcsin((srcYpdec-srcYp)/normv)*180./np.pi
         self.coordinates_transfer_para = {'x0': srcXp-minx, 'y0': srcYp-miny, 'dxra':dxra, 'dxdec':dxdec,'dyra':dyra,'dydec':dydec,'pixsc':self.pixel_scales[0].value, 'delta_ang':delta_ang}
         return imcut
-
 
     def get_size(self, units='pixel'):
         '''
@@ -338,7 +338,6 @@ class image(object):
         '''
         self.data = CCDData(data, unit=unit)
 
-
     def source_detection_individual(self, psfFWHM, nsigma=3.0, sc_key=''):
         '''
         Parameters
@@ -354,15 +353,14 @@ class image(object):
         sigma = psfFWHMpix * gaussian_fwhm_to_sigma
         kernel = Gaussian2DKernel(sigma, x_size=5, y_size=5)
         kernel.normalize()
-        segm = detect_sources(data, thresholder, npixels=5, filter_kernel=kernel)
-        props = source_properties(data, segm)
-        tab = Table(props.to_table())
+        segm = detect_sources(data, thresholder, npixels=5, kernel=kernel)
+        props = SourceCatalog(data, segm)
+        tab = Table(props.to_table(['xcentroid','ycentroid','semimajor_sigma','semiminor_sigma','orientation','segment_flux','fwhm','maxval_xindex','maxval_yindex']))
         self.sources_catalog = tab
         srcPstradec = self.data.wcs.all_pix2world(tab['xcentroid'], tab['ycentroid'],1)
         sc = SkyCoord(srcPstradec[0], srcPstradec[1], unit='deg')
         sctab = Table([sc,np.arange(len(sc))],names=['sc','sloop_{0}'.format(sc_key)])
         self.sources_skycord = sctab
-
 
     def make_mask(self,sources=None,magnification=3.):
         '''
@@ -381,14 +379,13 @@ class image(object):
             sources = self.sources_catalog
         for loop in range(len(sources)):
             position = (sources['xcentroid'][loop],sources['ycentroid'][loop])
-            a = sources['semimajor_axis_sigma'][loop]
-            b = sources['semiminor_axis_sigma'][loop]
+            a = sources['semimajor_sigma'][loop]
+            b = sources['semiminor_sigma'][loop]
             theta = sources['orientation'][loop]*180./np.pi
             mask=Maskellipse(mask,position,magnification*a,(1-b/a),theta)
         self.data.mask = mask
         if self.ss_data is not None:
             self.ss_data.mask = mask
-
 
     def set_mask(self, mask):
         '''
@@ -484,14 +481,18 @@ class image(object):
         hdu = fits.open(filepath)
         self.PSF = hdu[0].data
 
-    def gaussian_psf(self, fwhm=None, size=15):
+    def set_psf_fwhm(self, fwhm=None):
+        if fwhm is None:
+            self.psfFWHM_arcsec=self.psfFWHM_map[int(self.sources_skycord[1]),int(self.sources_skycord[0])]
+        else:
+            self.psfFWHM_arcsec = fwhm
+        return
+
+    def gaussian_psf(self, size=15):
         '''
         fwhm should in unit of arcsec
         '''
-        if fwhm is None:
-            psfFWHM=self.psfFWHM_map[int(self.sources_skycord[1]),int(self.sources_skycord[0])]/self.pixel_scales[0].value
-        else:
-            psfFWHM = fwhm/self.pixel_scales[0].value
+        psfFWHM = self.psfFWHM_arcsec/self.pixel_scales[0].value
         kernel = Gaussian2DKernel(psfFWHM/tl2, x_size=size, y_size=size)
         kernel.normalize()
         self.PSF = np.array(kernel)
@@ -501,7 +502,7 @@ class image_atlas(object):
     '''
     Many images.
     '''
-    def __init__(self, image_list=None, zp_list=None, band_list=None, psfFWHM_list=None):
+    def __init__(self, image_list=None, band_list=None):
         '''
         Parameters
         ----------
@@ -522,6 +523,7 @@ class image_atlas(object):
         else:
             self.band_list = band_list
 
+        '''
         if (zp_list is None) and (band_list is not None):
             zp_list = []
             for b in band_list:
@@ -529,11 +531,7 @@ class image_atlas(object):
 
             for loop, img in enumerate(self.image_list):
                 img.set_zero_point(zp_list[loop])
-
-        if psfFWHM_list is None:
-            self.psfFWHM_list = []
-        else:
-            self.psfFWHM_list = psfFWHM_list
+        '''
 
         self.__length = len(image_list)
         self.common_catalog = None
@@ -565,7 +563,9 @@ class image_atlas(object):
         if type(nsigma) == float:
             nsigma = nsigma * np.ones(self.__length,dtype=float)
         for loop in range(self.__length):
-            self.image_list[loop].source_detection_individual(self.psfFWHM_list[loop],nsigma=nsigma[loop],sc_key=loop+1)
+            fwhm = self.image_list[loop].psfFWHM_arcsec/self.image_list[loop].pixel_scales[0].value
+            self.image_list[loop].source_detection_individual(fwhm,nsigma=nsigma[loop],sc_key=loop+1)
+        return
 
     def make_common_catalog(self,CM_separation=2.5,magnification=3.0,applylist=None):
         '''
@@ -594,9 +594,9 @@ class image_atlas(object):
             a = []
             b = []
             for loop2 in applylist:
-                a.append(self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                a.append(self.image_list[loop2].sources_catalog['semimajor_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
                 *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
-                b.append(self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
+                b.append(self.image_list[loop2].sources_catalog['semiminor_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]]
                 *magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
             master_a[loop] = np.max(np.array(a))
             master_b[loop] = np.max(np.array(b))
@@ -620,6 +620,7 @@ class image_atlas(object):
                 self.image_list[loop].sky_subtraction(order[loop])
             else:
                 self.image_list[loop].sky_subtraction(order[loop],filepath=filepaths[loop])
+        return
 
     def master_mask(self, magnification=3.0, applylist=None):
         '''
@@ -640,21 +641,21 @@ class image_atlas(object):
         for loop2 in applylist:
             newsc = self.image_list[loop2].sources_catalog.copy()
             for loop in range(len(comc)):
-                self.image_list[loop2].sources_catalog['semimajor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_a'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
-                self.image_list[loop2].sources_catalog['semiminor_axis_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_b'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                self.image_list[loop2].sources_catalog['semimajor_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_a'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
+                self.image_list[loop2].sources_catalog['semiminor_sigma'][comc['sloop_{0}'.format(loop2+1)][loop]] = comc['master_b'][loop]/(magnification[loop2]*self.image_list[loop2].pixel_scales[0].value)
             indexes = np.delete(np.arange(len(self.image_list[loop2].sources_catalog)), comc['sloop_{0}'.format(loop2+1)])
             newsc.remove_rows(indexes)
             commonsourcelist.append(newsc)
         for loop2 in range(self.__length):
             self.image_list[loop2].make_mask(sources=commonsourcelist[loop2],magnification=magnification[loop2])
 
-    def generate_PSFs(self, equivalent_radius=2., size = 20.,oversampling=1, plot=None, filepaths=None):
+    def generate_PSFs(self, equivalent_radius=1.5, threshold = 50., axrit=0.75, size = 20.,oversampling=1, plot=None, filepaths=None):
         '''
         Generate effective point spread fuctions (ePSFs) for each image
         Parameters
         ----------
-        equivalent_radius : float, unit arcsec
-                            radius criteria to indentify star
+        equivalent_radius : float,
+                            radius criteria to indentify star: fwhm of sourve < equivalent_radius*psfFWHM
         size : float, unit pixel
                use what size box to extract stars
         oversampling : int
@@ -665,10 +666,17 @@ class image_atlas(object):
         '''
         stars = self.common_catalog.copy()
         remolist = []
+        flux_thre = []
+        for loop2 in range(self.__length):
+            flux_thre.append(np.percentile(self.image_list[loop2].sources_catalog['segment_flux'],threshold))
         for loop in range(len(stars)):
             for loop2 in range(self.__length):
-                a = (self.image_list[loop2].sources_catalog['equivalent_radius'][stars['sloop_{0}'.format(loop2+1)][loop]])*self.image_list[loop2].pixel_scales[0].value
-                if (a > equivalent_radius):
+                catloop = stars['sloop_{0}'.format(loop2+1)][loop]
+                a = (self.image_list[loop2].sources_catalog['fwhm'][catloop])*self.image_list[loop2].pixel_scales[0].value/self.image_list[loop2].psfFWHM_arcsec
+                ar = self.image_list[loop2].sources_catalog['semiminor_sigma'][catloop]/self.image_list[loop2].sources_catalog['semimajor_sigma'][catloop]
+                fls = self.image_list[loop2].sources_catalog['segment_flux'][catloop]
+                sigvalue = self.image_list[loop2].sigma_image[self.image_list[loop2].sources_catalog['maxval_yindex'][catloop],self.image_list[loop2].sources_catalog['maxval_xindex'][catloop]]
+                if (a > equivalent_radius)|(ar<axrit)|(fls<flux_thre[loop2])|np.isinf(sigvalue):
                     remolist.append(loop)
                     break
         stars.remove_rows(remolist)
@@ -679,9 +687,12 @@ class image_atlas(object):
             indexes = np.delete(np.arange(len(self.image_list[loop2].sources_catalog)), stars['sloop_{0}'.format(loop2+1)])
             newsc.remove_rows(indexes)
             stars_tbl = Table()
-            stars_tbl['x']=np.array(newsc['maxval_xpos'])
-            stars_tbl['y']=np.array(newsc['maxval_ypos'])
-            nddata = NDData(data=np.array(self.image_list[loop2].ss_data))
+            stars_tbl['x']=np.array(newsc['maxval_xindex'])
+            stars_tbl['y']=np.array(newsc['maxval_yindex'])
+            if self.image_list[loop2].ss_data is not None:
+                nddata = NDData(data=np.array(self.image_list[loop2].ss_data))
+            else:
+                nddata = NDData(data=np.array(self.image_list[loop2].data.data-self.image_list[loop2].sky_median))
             Tstar = extract_stars(nddata, stars_tbl, size=size)
             epsf_builder = EPSFBuilder(oversampling=oversampling, maxiters=15,progress_bar=False)
             epsf, fitted_stars = epsf_builder(Tstar)
@@ -693,8 +704,9 @@ class image_atlas(object):
             if plot is not None:
                 star_images.append(Tstar)
                 PSFs.append(epsf.data)
+        #print ('len',len(Tstar),len(stars))
         if plot is not None:
-            tlens = len(stars)
+            tlens = len(Tstar)
             if (((tlens//5)+1)*5-tlens) < (((tlens//4)+1)*4-tlens):
                 ncols = 5
                 nrows = (tlens//5)+1
