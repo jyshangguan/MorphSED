@@ -195,7 +195,7 @@ class Galaxy3D(object):
         ------
         '''
         ny,nx=self.imshape
-        tot_IFU = np.zeros((len(wavelength),ny,nx))
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
         r_grid = np.logspace(np.log10(0.5),np.log10(np.max(self.r_map)),resolution)
         vmax = np.max(self.rotation_map)
         minwave = np.min(wavelength)
@@ -228,7 +228,7 @@ class Galaxy3D(object):
                 wave_loop = wavelength/(1.+self.rotation_map[loopy][loopx]/SEDs.c)
                 for key in self.subCs:
                     for loop in range(len(self.subCs[key])):
-                        tot_IFU[:,loopy,loopx] += self.mass_map[key][loop][loopy][loopx]*self.subCs[key][loop]['intp']((self.r_map[loopy][loopx],wave_loop))
+                        tot_IFU[loopy,loopx,:] += self.mass_map[key][loop][loopy][loopx]*self.subCs[key][loop]['intp']((self.r_map[loopy][loopx],wave_loop))
         return tot_IFU
 
     def emission_line(self,wavelength,lines,ampmap,sigmap):
@@ -246,67 +246,9 @@ class Galaxy3D(object):
         ------
         '''
         ny,nx=self.imshape
-        tot_IFU = np.zeros((len(wavelength),ny,nx))
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
         for loop,line in enumerate(lines):
             sig_pix = sigmap*line['wave']/SEDs.c
             cen_pix = (1.+self.rotation_map/SEDs.c)*line['wave']
             tot_IFU += SEDs.gaussian3D(wavelength,ampmap[loop],cen_pix,sig_pix)
         return tot_IFU
-
-class AGN3D(object):
-    '''
-    the AGN object
-    with physical subcomponents and parameters
-    '''
-    def __init__(self,logM_BH=8.,logLedd=-1.,astar=0., cf=0.2, Av=0., z=0., ebv_G=0.):
-        '''
-        galaxy object is initialed from a given mass
-        '''
-        self.logM_BH = logM_BH
-        self.logLedd=logLedd
-        self.astar = astar
-        self.cf=cf
-        self.Av = Av
-        self.redshift = z
-        self.ebv_G = ebv_G
-
-    def generate_image(self, shape,band, convolve_func, psfparams, psftype='psf'):
-        '''
-        Parameters:
-        shape: (y,x) of the output image
-
-        band: band of the output image
-
-        convolve_func: 2D array, the shape of empirical PSF
-
-        {psftype: [psfparams]}: a dict, the point spread function
-        eg.  {'psf': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
-             {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
-        '''
-        filterpath = '/Users/liruancun/Softwares/anaconda3/lib/python3.7/site-packages/ezgal/data/filters/'
-        resp = Table.read(filterpath + band,format='ascii')
-        ny = shape[0]
-        nx = shape[1]
-        filter_x=resp['col1']
-        filter_y=resp['col2']
-        tminx = np.min(filter_x)
-        tmaxx = np.max(filter_x)
-        interX = np.linspace(tminx,tmaxx,100)
-        f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
-        ax=trapz(f2(interX),x=interX)
-        waveintrin = interX/(1.+self.redshift)
-        agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,self.Av,1.)
-        x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
-        flux_band = trapz(agnsed*f2(interX),x=interX)/ax
-        magzero = 18.
-        mag = -2.5*np.log10(flux_band)+magzero
-        #print (mag)
-        psfparams.update({'mag':mag})
-        profit_model = {'width':  nx,
-            'height': ny,
-            'magzero': magzero,
-            'psf': convolve_func,
-            'profiles': {psftype:[psfparams]}
-           }
-        agn_map, _ = pyprofit.make_model(profit_model)
-        return np.array(agn_map)

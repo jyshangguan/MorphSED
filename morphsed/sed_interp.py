@@ -57,9 +57,9 @@ def gaussian(x, amp, cen, wid):
 def gaussian3D(x, amp, cen, wid):
     ny,nx = amp.shape
     tlen = len(x)
-    IFU = np.zeros((tlen,ny,nx))
+    IFU = np.zeros((ny,nx,tlen))
     for loop in range(tlen):
-        IFU[loop,:,:] = (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x[loop]-cen)**2 / (2*wid**2))
+        IFU[:,:,loop] = (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x[loop]-cen)**2 / (2*wid**2))
     return IFU
 
 feii_template_op = Table.read('{0}/templates/irontemplate_op_new.ipac'.format(DATA_PATH),format='ascii')

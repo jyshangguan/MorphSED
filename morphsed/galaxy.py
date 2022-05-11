@@ -4,6 +4,7 @@ from  lmfit.models import GaussianModel
 from scipy.integrate import trapz
 from astropy.convolution import convolve_fft
 import numpy as np
+import extinction
 from astropy.table import Table
 from scipy.interpolate import interp1d
 import sys
@@ -485,13 +486,13 @@ class AGN(object):
         if not turnoff:
             agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
             if self.BLR is None:
-                agnsed_rest += 10**intp_BLRTOT((spin,logM,logMdot,waveintrin))
+                agnsed_rest += 10**SEDs.intp_BLRTOT((self.astar,self.logM_BH,self.logLedd,waveintrin))
             elif par_tot is not None:
                 agnsed_rest += self.BLR.eval(par_tot,x=waveintrin)
             if (self.NLR is not None)&(par_tot is not None):
                 agnsed_rest += self.NLR.eval(par_tot,x=waveintrin)
             if self.Av > 0.:
-                cm=extinction.ccm89(waveintrin,Av,3.1)/2.5
+                cm=extinction.ccm89(waveintrin,self.Av,3.1)/2.5
                 agnsed_rest /= 10**cm
         else:
             agnsed_rest = np.zeros_like(waveintrin)
@@ -499,6 +500,25 @@ class AGN(object):
                 agnsed_rest += self.NLR.eval(par_tot,x=waveintrin)
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         return agnsed
+
+    def generate_SED_IFU(self, wavelength, shape, position,par_BLR=None):
+        ny,nx = shape
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
+        inty = int(position[1])
+        intx = int(position[0])
+        waveintrin = wavelength/(1.+self.redshift)
+        agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+        if self.BLR is None:
+            agnsed_rest += 10**SEDs.intp_BLRTOT((self.astar,self.logM_BH,self.logLedd,waveintrin))
+        elif par_BLR is not None:
+            agnsed_rest += self.BLR.eval(par_BLR,x=waveintrin)
+        if self.Av > 0.:
+            cm=extinction.ccm89(waveintrin,self.Av,3.1)/2.5
+            agnsed_rest /= 10**cm
+        x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
+        tot_IFU[inty,intx,:]=agnsed
+        return tot_IFU
+
 
 class PSF(object):
     def __init__(self,xcen,ycen):
