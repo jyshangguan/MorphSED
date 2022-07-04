@@ -194,6 +194,42 @@ class Galaxy(object):
         self.maglist.append(params['mag'])
         #print (self.maglist)
 
+    def add_arbsubC(self,Pro_names,mass_map,ageparam,Zparam,f_cont,Avparam,sigmaparam={'type': "const", 'paradic':{'value': 100}},arbi_para={'func':'Users'}):
+        '''
+        To add a subcomponent for a galaxy object
+
+        Pro_names: the name of the profiles
+        e.g. = "sersic" "coresersic" "brokenexp" "moffat" "ferrer" "king" "pointsource"
+
+        params: a dictionary of the parameters for this subcomponent
+        e.g. for sersic: {'xcen': 50.0, 'ycen': 50.0, 'frac': 0.704, 're': 10.0,
+        'nser': 3.0, 'ang': -32.70422048691768, 'axrat': 1.0, 'box': 0.0, 'convolve': False}
+
+        ageparam: a dictionary of the age dsitribution parameters for this subcomponent
+        e.g. {'type': 'linear', 'paradic': {'k': -0.05, 'b': 9.0}}
+             {'type': 'const', 'paradic': {'value': 5.0}}
+
+        Zparam: a dictionary of the matallicity dsitribution parameters for this subcomponent
+        e.g. {'type': 'linear', 'paradic': {'k': 0.0, 'b': 0.02}}
+
+        f_cont: a dictionary of the fraction of starformation dsitribution parameters for this subcomponent
+        between [0.,1.], fraction of starformation
+        '''
+        if Pro_names in self.subCs.keys():
+            self.subCs[Pro_names].append(arbi_para)
+            self.ageparams[Pro_names].append(ageparam)
+            self.Zparams[Pro_names].append(Zparam)
+            self.Avparams[Pro_names].append(Avparam)
+            self.f_cont[Pro_names].append(f_cont)
+        else:
+            self.subCs.update({Pro_names : [arbi_para]})
+            self.ageparams.update({Pro_names : [ageparam]})
+            self.Zparams.update({Pro_names : [Zparam]})
+            self.Avparams.update({Pro_names : [Avparam]})
+            self.f_cont.update({Pro_names : [f_cont]})
+            self.mass_map.update({Pro_names : []})
+        self.mass_map[Pro_names].append(mass_map)
+
     def generate_mass_map(self,shape,convolve_func,transpar=None,aperturemask=None):
         '''
         gemerate the mass distribution map for a galaxy object
@@ -339,7 +375,7 @@ class AGN(object):
         self.Av = Av
         return
 
-    def set_full_model(self, obsspec, lines_broad, lines_narrow, nbroad=2, nnarrow=1,strict=0.01,broader=12000.,**kwargs):
+    def set_full_model(self, obsspec, lines_broad, lines_narrow, nbroad=2, nnarrow=1,strict=0.01,broader=12000.,prefix='',**kwargs):
         '''
         set the BLR NLR models for the AGN component
         ------
@@ -355,37 +391,37 @@ class AGN(object):
             bcentershift = kwargs['bcentershift']
         else:
             bcentershift = 0.
-        m_BLR  = lmfit.Model(SEDs.FeII,prefix='FeII')
-        m_BLR += lmfit.Model(SEDs.BaC,prefix='BaC')
+        m_BLR  = lmfit.Model(SEDs.FeII,prefix='FeII{0}'.format(prefix))
+        m_BLR += lmfit.Model(SEDs.BaC,prefix='BaC{0}'.format(prefix))
         lab = []
         for line in lines_broad:
             for loop in range(nbroad):
-                    m_BLR+=GaussianModel(prefix=line['name']+'b{0}'.format(loop+1))
+                    m_BLR+=GaussianModel(prefix=line['name']+'b{0}{1}'.format(loop+1,prefix))
             lab.append(np.abs(np.interp(line['wave'],obsspec[0],obsspec[1])*50*np.sqrt(2*np.pi)))
         par_BLR = m_BLR.make_params()
         stdhb = np.median(obsspec[1])
-        par_BLR['FeIIA_uv'].set(0.7*stdhb/4000.,min=0.7*stdhb/400000.,max=0.7*stdhb/40.)
-        par_BLR['FeIIA_op'].set(stdhb/4000.,min=stdhb/400000.,max=stdhb/40.)
-        par_BLR['FeIIfwhm'].set(2000.,min=900.,max=9000.)
-        par_BLR['FeIIdcen'].set(0.,min=-3000.,max=3000.)
-        par_BLR['BaCcf'].set(0.2,min=0.,max=1.)
-        par_BLR['BaClogM'].set(expr='1.*agn_logM')
-        par_BLR['BaClogMdot'].set(expr='1.*agn_logLedd')
-        par_BLR['BaCspin'].set(expr='1.*agn_spin')
-        par_BLR['BaCdcen'].set(0.,min=-3000.,max=3000.)
-        par_BLR['BaCfwhm'].set(2000.,min=900.,max=9000.)
+        par_BLR['FeII{0}A_uv'.format(prefix)].set(0.7*stdhb/4000.,min=0.7*stdhb/400000.,max=0.7*stdhb/40.)
+        par_BLR['FeII{0}A_op'.format(prefix)].set(stdhb/4000.,min=stdhb/400000.,max=stdhb/40.)
+        par_BLR['FeII{0}fwhm'.format(prefix)].set(2000.,min=900.,max=9000.)
+        par_BLR['FeII{0}dcen'.format(prefix)].set(0.,min=-3000.,max=3000.)
+        par_BLR['BaC{0}cf'.format(prefix)].set(0.2,min=0.,max=1.)
+        par_BLR['BaC{0}logM'.format(prefix)].set(expr='1.*agn_logM')
+        par_BLR['BaC{0}logMdot'.format(prefix)].set(expr='1.*agn_logLedd')
+        par_BLR['BaC{0}spin'.format(prefix)].set(expr='1.*agn_spin')
+        par_BLR['BaC{0}dcen'.format(prefix)].set(0.,min=-3000.,max=3000.)
+        par_BLR['BaC{0}fwhm'.format(prefix)].set(2000.,min=900.,max=9000.)
         for loopline, line in enumerate(lines_broad):
             la=lab[loopline]
             for loop in range(nbroad):
                 if loop ==0:
-                    par_BLR['{0}b{1}sigma'.format(line['name'],loop+1)].set(value=line['wave']*2500./c/tl2,min=line['wave']*1200./c/tl2,max=line['wave']*broader/c/tl2)
-                    par_BLR['{0}b{1}amplitude'.format(line['name'],loop+1)].set(value=la,min=0.,max=100*la)
-                    par_BLR['{0}b{1}center'.format(line['name'],loop+1)].set(value=line['wave'],min=line['wave']-50.,max=line['wave']+50.)
+                    par_BLR['{0}b{1}{2}sigma'.format(line['name'],loop+1,prefix)].set(value=line['wave']*2500./c/tl2,min=line['wave']*1200./c/tl2,max=line['wave']*broader/c/tl2)
+                    par_BLR['{0}b{1}{2}amplitude'.format(line['name'],loop+1,prefix)].set(value=la,min=0.,max=100*la)
+                    par_BLR['{0}b{1}{2}center'.format(line['name'],loop+1,prefix)].set(value=line['wave'],min=line['wave']-50.,max=line['wave']+50.)
                 else:
                     censhi = (bcentershift*loop)/(nbroad-1)
-                    par_BLR['{0}b{1}sigma'.format(line['name'],loop+1)].set(value=line['wave']*5000./c/tl2,min=line['wave']*2000./c/tl2,max=line['wave']*broader/c/tl2)
-                    par_BLR['{0}b{1}amplitude'.format(line['name'],loop+1)].set(value=0.1*la,min=0.,max=10*la)
-                    par_BLR['{0}b{1}center'.format(line['name'],loop+1)].set(value=line['wave']+censhi,min=line['wave']+censhi-200.,max=line['wave']+censhi+200.)
+                    par_BLR['{0}b{1}{2}sigma'.format(line['name'],loop+1,prefix)].set(value=line['wave']*5000./c/tl2,min=line['wave']*2000./c/tl2,max=line['wave']*broader/c/tl2)
+                    par_BLR['{0}b{1}{2}amplitude'.format(line['name'],loop+1,prefix)].set(value=0.1*la,min=0.,max=10*la)
+                    par_BLR['{0}b{1}{2}center'.format(line['name'],loop+1,prefix)].set(value=line['wave']+censhi,min=line['wave']+censhi-200.,max=line['wave']+censhi+200.)
         self.BLR = m_BLR
         nperfix=None
         first=None
@@ -395,34 +431,34 @@ class AGN(object):
                 if nperfix is None:
                     nperfix=line
                     first=line
-                    m_NLR=GaussianModel(prefix=line['name']+'n{0}'.format(loop+1))
+                    m_NLR=GaussianModel(prefix=line['name']+'n{0}{1}'.format(loop+1,prefix))
                 else:
-                    m_NLR+=GaussianModel(prefix=line['name']+'n{0}'.format(loop+1))
+                    m_NLR+=GaussianModel(prefix=line['name']+'n{0}{1}'.format(loop+1,prefix))
             lan.append(np.abs(np.interp(line['wave'],obsspec[0],obsspec[1])*5*np.sqrt(2*np.pi)))
         par_NLR = m_NLR.make_params()
         for loopline, line in enumerate(lines_narrow):
             la=lan[loopline]
             if loopline == 0:
-                par_NLR['{0}n1center'.format(line['name'])].set(value=line['wave'],min=(1.-strict)*line['wave'],max=(1.+strict)*line['wave'])
-                par_NLR['{0}n1sigma'.format(line['name'])].set(value=5.,min=line['wave']*100./c/tl2,max=line['wave']*1060./c/tl2)
-                par_NLR['{0}n1amplitude'.format(line['name'])].set(value=la,min=0.,max=100*la)
+                par_NLR['{0}n1{1}center'.format(line['name'],prefix)].set(value=line['wave'],min=(1.-strict)*line['wave'],max=(1.+strict)*line['wave'])
+                par_NLR['{0}n1{1}sigma'.format(line['name'],prefix)].set(value=5.,min=line['wave']*100./c/tl2,max=line['wave']*1060./c/tl2)
+                par_NLR['{0}n1{1}amplitude'.format(line['name'],prefix)].set(value=la,min=0.,max=100*la)
                 for loop in range(nnarrow-1):
-                    par_NLR['{0}n{1}center'.format(line['name'],loop+2)].set(value=line['wave']-5.*(loop+1),min=line['wave']-35.,max=line['wave']+20.)
-                    par_NLR['{0}n{1}sigma'.format(line['name'],loop+2)].set(value=line['wave']*1500./c/tl2,min=line['wave']*200./c/tl2,max=line['wave']*2500./c/tl2)
-                    par_NLR['{0}n{1}amplitude'.format(line['name'],loop+2)].set(value=1.*la/(0.8**(loop+1)),min=0.,max=10*la)
+                    par_NLR['{0}n{1}{2}center'.format(line['name'],loop+2,prefix)].set(value=line['wave']-5.*(loop+1),min=line['wave']-35.,max=line['wave']+20.)
+                    par_NLR['{0}n{1}{2}sigma'.format(line['name'],loop+2,prefix)].set(value=line['wave']*1500./c/tl2,min=line['wave']*200./c/tl2,max=line['wave']*2500./c/tl2)
+                    par_NLR['{0}n{1}{2}amplitude'.format(line['name'],loop+2,prefix)].set(value=1.*la/(0.8**(loop+1)),min=0.,max=10*la)
             else:
                 for loop in range(nnarrow):
-                    par_NLR['{0}n{1}sigma'.format(line['name'],loop+1)].set(expr='{0}*{1}n{2}sigma'.format(line['wave']/nperfix['wave'],nperfix['name'],loop+1))
-                    par_NLR['{0}n{1}center'.format(line['name'],loop+1)].set(expr='{0}*{1}n{2}center'.format(line['wave']/nperfix['wave'],nperfix['name'],loop+1))
+                    par_NLR['{0}n{1}{2}sigma'.format(line['name'],loop+1,prefix)].set(expr='{0}*{1}n{2}{3}sigma'.format(line['wave']/nperfix['wave'],nperfix['name'],loop+1,prefix))
+                    par_NLR['{0}n{1}{2}center'.format(line['name'],loop+1,prefix)].set(expr='{0}*{1}n{2}{3}center'.format(line['wave']/nperfix['wave'],nperfix['name'],loop+1,prefix))
                     if loop == 0:
                         if line['name'] == EL.OIII_4959['name']:
-                            par_NLR['{0}n{1}amplitude'.format(EL.OIII_4959['name'],loop+1)].set(expr='0.33557*{0}n{1}amplitude'.format(EL.OIII_5007['name'],loop+1))
+                            par_NLR['{0}n{1}{2}amplitude'.format(EL.OIII_4959['name'],loop+1,prefix)].set(expr='0.33557*{0}n{1}{2}amplitude'.format(EL.OIII_5007['name'],loop+1,prefix))
                         elif line['name'] == EL.NII_6549['name']:
-                            par_NLR['{0}n{1}amplitude'.format(EL.NII_6549['name'],loop+1)].set(expr='0.337838*{0}n{1}amplitude'.format(EL.NII_6583['name'],loop+1))
+                            par_NLR['{0}n{1}{2}amplitude'.format(EL.NII_6549['name'],loop+1,prefix)].set(expr='0.337838*{0}n{1}{2}amplitude'.format(EL.NII_6583['name'],loop+1,prefix))
                         else:
-                            par_NLR['{0}n{1}amplitude'.format(line['name'],loop+1)].set(value=la,min=0.,max=100*la)
+                            par_NLR['{0}n{1}{2}amplitude'.format(line['name'],loop+1,prefix)].set(value=la,min=0.,max=100*la)
                     else:
-                        par_NLR['{0}n{1}amplitude'.format(line['name'],loop+1)].set(expr='1.*{0}n{1}amplitude*{2}n1amplitude/{0}n1amplitude'.format(nperfix['name'],loop+1,line['name']))
+                        par_NLR['{0}n{1}{2}amplitude'.format(line['name'],loop+1,prefix)].set(expr='1.*{0}n{1}{2}amplitude*{3}n1{2}amplitude/{0}n1{2}amplitude'.format(nperfix['name'],loop+1,prefix,line['name']))
         self.NLR = m_NLR
         return par_BLR,par_NLR
 

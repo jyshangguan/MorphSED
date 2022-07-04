@@ -118,6 +118,46 @@ class Galaxy3D(object):
             self.mass_map.update({Pro_names : []})
         self.maglist.append(params['mag'])
 
+    def add_arbsubC(self,Pro_names,mass_map,ageparam,Zparam,f_cont,Avparam,sigmaparam={'type': "const", 'paradic':{'value': 100}},arbi_para={'func':'Users'}):
+        '''
+        To add a subcomponent for a galaxy object
+
+        Pro_names: the name of the profiles
+        e.g. = "sersic" "coresersic" "brokenexp" "moffat" "ferrer" "king" "pointsource"
+
+        params: a dictionary of the parameters for this subcomponent
+        e.g. for sersic: {'xcen': 50.0, 'ycen': 50.0, 'frac': 0.704, 're': 10.0,
+        'nser': 3.0, 'ang': -32.70422048691768, 'axrat': 1.0, 'box': 0.0, 'convolve': False}
+
+        ageparam: a dictionary of the age dsitribution parameters for this subcomponent
+        e.g. {'type': 'linear', 'paradic': {'k': -0.05, 'b': 9.0}}
+             {'type': 'const', 'paradic': {'value': 5.0}}
+
+        Zparam: a dictionary of the matallicity dsitribution parameters for this subcomponent
+        e.g. {'type': 'linear', 'paradic': {'k': 0.0, 'b': 0.02}}
+
+        f_cont: a dictionary of the fraction of starformation dsitribution parameters for this subcomponent
+        between [0.,1.], fraction of starformation
+        '''
+        if Pro_names in self.subCs.keys():
+            self.subCs[Pro_names].append(arbi_para)
+            self.ageparams[Pro_names].append(ageparam)
+            self.Zparams[Pro_names].append(Zparam)
+            self.Avparams[Pro_names].append(Avparam)
+            self.f_cont[Pro_names].append(f_cont)
+            self.sigmaparams[Pro_names].append(sigmaparam)
+        else:
+            self.subCs.update({Pro_names : [arbi_para]})
+            self.ageparams.update({Pro_names : [ageparam]})
+            self.Zparams.update({Pro_names : [Zparam]})
+            self.Avparams.update({Pro_names : [Avparam]})
+            self.f_cont.update({Pro_names : [f_cont]})
+            self.sigmaparams.update({Pro_names : [sigmaparam]})
+            self.mass_map.update({Pro_names : []})
+        self.mass_map[Pro_names].append(mass_map)
+
+
+
     def geometry_3D(self,geometry):
         '''
         Construct the 3D geometry of a well-defined galaxy
