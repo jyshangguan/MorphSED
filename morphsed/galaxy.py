@@ -42,6 +42,14 @@ def coordinates_transfer(x, y, kwargs):
     yp = kwargs['y0'] + x*kwargs['dyra'] + y*kwargs['dydec']
     return xp,yp
 
+def coordinates_transfer_inverse(xp, yp, kwargs):
+    '''
+    Transform the (xp,yp) from (pix, pix) space to (\Delat RA, \Delta Dec)
+    '''
+    x = ((xp-kwargs['x0'])*kwargs['dydec'] - (yp-kwargs['y0'])*kwargs['dxdec'])/(kwargs['dxra']*kwargs['dydec']-kwargs['dyra']*kwargs['dxdec'])
+    y = ((xp-kwargs['x0'])*kwargs['dyra'] - (yp-kwargs['y0'])*kwargs['dxra'])/(kwargs['dyra']*kwargs['dxdec']-kwargs['dxra']*kwargs['dydec'])
+    return x,y
+
 class switch(object):
     def __init__(self, value):
         self.value = value
@@ -144,7 +152,7 @@ class Galaxy(object):
         self.f_cont={}
         self.Avparams={}
         self.maglist = []
-        self.imshape = None
+        self.shape = None
         self.mass_map = {}
         self.r_map = None
         self.redshift = z
@@ -229,6 +237,7 @@ class Galaxy(object):
             self.f_cont.update({Pro_names : [f_cont]})
             self.mass_map.update({Pro_names : []})
         self.mass_map[Pro_names].append(mass_map)
+        self.shape = mass_map.shape
 
     def generate_mass_map(self,shape,convolve_func,transpar=None,aperturemask=None):
         '''
