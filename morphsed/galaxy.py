@@ -23,6 +23,7 @@ from pathlib import Path
     'wfpc2_f555w', 'wfc3_f438w', 'wfc3_f105w', 'newfirm_h', 'wfc3_f160w', 'j', 'v', 'acs_f775w', 'wfpc2_f606w', 'wise_ch2',
     'acs_f814w', 'wfc3_f850lp', 'b', 'wise_ch3', 'wise_ch4', 'acs_f850lp'
 '''
+
 filterpath = Path(__file__).parent / 'data/filters'
 
 tl2=2*np.sqrt(2*np.log(2))
