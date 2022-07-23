@@ -112,6 +112,8 @@ class image(object):
         dyra = (srcYpra-srcYp)/60.
         dxdec = (srcXpdec-srcXp)/60.
         dydec = (srcYpdec-srcYp)/60.
+        #print("Calculated pixel difference by increasing 1-arcsec RA: (X, pix)",dxra," (Y, pix)",dyra)
+        #print("Calculated pixel difference by increasing 1-arcsec DEC: (X, pix)",dxdec," (Y, pix)",dydec)
         self.sources_skycord = [srcXp,srcYp]
         cutsize_int = int(cutsize/self.pixel_scales[0].value)
         ny,nx=self.data.data.shape
@@ -132,7 +134,7 @@ class image(object):
         if self.sigma_image is not None:
             self.cut_sigma_image = self.sigma_image[miny:maxy,minx:maxx]
         else:
-            if type(gain) is float:
+            if type(gain) is not str:
                 GAIN=gain
             else:
                 GAIN = self.data.meta[gain]
