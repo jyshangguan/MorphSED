@@ -141,11 +141,10 @@ class Galaxy(object):
     the galaxy object
     with physical subcomponents and parameters
     '''
-    def __init__(self, mass=1e9, z=0., ebv_G=0., zero_point=21.0):
+    def __init__(self, mass=1e9, z=0., ebv_G=0.):
         '''
         galaxy object is initialed from a given mass
         '''
-        self.zero_point=zero_point
         self.mass = mass
         self.Nsub=0
         self.subCs = {}
