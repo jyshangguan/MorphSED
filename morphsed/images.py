@@ -146,7 +146,8 @@ class image(object):
         vector = [srcXpdec-srcXp,srcYpdec-srcYp]
         normv = np.sqrt(vector[0]**2+vector[1]**2)
         delta_ang = np.arcsin((srcYpdec-srcYp)/normv)*180./np.pi
-        self.coordinates_transfer_para = {'x0': srcXp-minx, 'y0': srcYp-miny, 'dxra':dxra, 'dxdec':dxdec,'dyra':dyra,'dydec':dydec,'pixsc':self.pixel_scales[0].value, 'delta_ang':delta_ang}
+        #x/y0shift was added for relative alignment calibration between different instruments
+        self.coordinates_transfer_para = {'x0': srcXp-minx,'x0shift':0.0, 'y0': srcYp-miny,'y0shift':0.0, 'dxra':dxra, 'dxdec':dxdec,'dyra':dyra,'dydec':dydec,'pixsc':self.pixel_scales[0].value, 'delta_ang':delta_ang}
         return imcut
 
     def get_size(self, units='pixel'):

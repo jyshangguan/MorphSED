@@ -39,8 +39,8 @@ def coordinates_transfer(x, y, kwargs):
     '''
     Transform the (x,y) from (\Delat RA, \Delta Dec) space to (pix, pix)
     '''
-    xp = kwargs['x0'] + x*kwargs['dxra'] + y*kwargs['dxdec']
-    yp = kwargs['y0'] + x*kwargs['dyra'] + y*kwargs['dydec']
+    xp = kwargs['x0'] + kwargs['x0shift'] + x*kwargs['dxra'] + y*kwargs['dxdec']
+    yp = kwargs['y0'] + kwargs['y0shift'] + x*kwargs['dyra'] + y*kwargs['dydec']
     return xp,yp
 
 def coordinates_transfer_inverse(xp, yp, kwargs):
@@ -504,7 +504,7 @@ class AGN(object):
         if (self.NLR is not None)&(par_tot is not None):
             agnsed_rest += self.NLR.eval(par_tot,x=waveintrin)
         if self.Av > 0.:
-            cm=extinction.ccm89(waveintrin,Av,3.1)/2.5
+            cm=extinction.ccm89(waveintrin,self.Av,3.1)/2.5
             agnsed_rest /= 10**cm
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         flux_band = trapz(agnsed*f2(interX),x=interX)/ax
@@ -512,17 +512,18 @@ class AGN(object):
         mag = -2.5*np.log10(flux_band)+magzero
         #print (mag)
         psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
         if transpar is None:
             xpix,ypix = indentify_xy(self.xcen,self.ycen)
         else:
-            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
-        psfparams['xcen'] = xpix
-        psfparams['ycen'] = ypix
+            xpix,ypix = coordinates_transfer(psfparams['xcen'],psfparams['ycen'],transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
         profit_model = {'width':  nx,
             'height': ny,
             'magzero': magzero,
             'psf': convolve_func,
-            'profiles': {psftype:[psfparams]}
+            'profiles': {psftype:[psfpar_copy]}
            }
         agn_map, _ = pyprofit.make_model(profit_model)
         return np.array(agn_map)
