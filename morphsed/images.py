@@ -96,7 +96,7 @@ class image(object):
         self.coordinates_transfer_para = None
         self.sky_median = 0.
 
-    def img_cut(self,ra,dec,cutsize,gain='CELL.GAIN',extime='EXPTIME',sigma_clipped=True):
+    def img_cut(self,ra,dec,cutsize,cutposition=None,gain='CELL.GAIN',extime='EXPTIME',sigma_clipped=True):
         #cutsize is arcsec unit
         #delta_ang point to east direction
         srcPstXY = self.data.wcs.all_world2pix([ra], [dec], 1)
@@ -115,12 +115,29 @@ class image(object):
         #print("Calculated pixel difference by increasing 1-arcsec RA: (X, pix)",dxra," (Y, pix)",dyra)
         #print("Calculated pixel difference by increasing 1-arcsec DEC: (X, pix)",dxdec," (Y, pix)",dydec)
         self.sources_skycord = [srcXp,srcYp]
-        cutsize_int = int(cutsize/self.pixel_scales[0].value)
         ny,nx=self.data.data.shape
-        minx = np.max([int(srcXp)-cutsize_int,0])
-        maxx = np.min([int(srcXp)+cutsize_int,nx])
-        miny = np.max([int(srcYp)-cutsize_int,0])
-        maxy = np.min([int(srcYp)+cutsize_int,ny])
+        if type(cutsize) is float:
+            cutsize_int = int(cutsize/self.pixel_scales[0].value)
+            minx = np.max([int(srcXp)-cutsize_int,0])
+            maxx = np.min([int(srcXp)+cutsize_int,nx])
+            miny = np.max([int(srcYp)-cutsize_int,0])
+            maxy = np.min([int(srcYp)+cutsize_int,ny])
+        else:
+            cutsize_intx1 = int(cutsize[0]/self.pixel_scales[0].value)
+            cutsize_intx2 = int(cutsize[1]/self.pixel_scales[0].value)
+            cutsize_inty1 = int(cutsize[2]/self.pixel_scales[0].value)
+            cutsize_inty2 = int(cutsize[3]/self.pixel_scales[0].value)
+            minx = np.max([int(srcXp)-cutsize_intx1,0])
+            maxx = np.min([int(srcXp)+cutsize_intx2,nx])
+            miny = np.max([int(srcYp)-cutsize_inty1,0])
+            maxy = np.min([int(srcYp)+cutsize_inty2,ny])
+        if cutposition is not None:
+            minx = cutposition[0]
+            maxx = cutposition[1]
+            miny = cutposition[2]
+            maxy = cutposition[3]
+        else:
+            cutposition = [minx,maxx,miny,maxy]
         imcut = self.data.data[miny:maxy,minx:maxx]
         self.cut_image = imcut
         if sigma_clipped:
@@ -148,7 +165,7 @@ class image(object):
         delta_ang = np.arcsin((srcYpdec-srcYp)/normv)*180./np.pi
         #x/y0shift was added for relative alignment calibration between different instruments
         self.coordinates_transfer_para = {'x0': srcXp-minx,'x0shift':0.0, 'y0': srcYp-miny,'y0shift':0.0, 'dxra':dxra, 'dxdec':dxdec,'dyra':dyra,'dydec':dydec,'pixsc':self.pixel_scales[0].value, 'delta_ang':delta_ang}
-        return imcut
+        return imcut,cutposition
 
     def get_size(self, units='pixel'):
         '''

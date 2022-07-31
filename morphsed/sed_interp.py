@@ -221,3 +221,8 @@ def sed_to_rest(x,y,z,ebv):
     xnew/=(1+z)
     ynew*=(1+z)**3
     return xnew,ynew
+
+def Bbody(x, Teff):
+    # Normalized to R_s
+    fx = 190095060845894.53/(x**5*(np.exp(143876866./(Teff*x))-1))
+    return fx

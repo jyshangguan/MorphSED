@@ -291,7 +291,10 @@ class Galaxy(object):
                 image += mass_map
                 if self.r_map is None:
                     r = np.sqrt( (xmesh+0.5 - xpix)**2. + (ymesh+0.5 - ypix)**2.)
-                    self.r_map = r*transpar['pixsc']
+                    if transpar is not None:
+                        self.r_map = r*transpar['pixsc']
+                    else:
+                        self.r_map = r
                 if aperturemask is not None:
                     apertures.append(np.sum(mass_map[aperturemask])/ np.sum(mass_map))
                 #self.ageparams[key][loop].update({'age_map' : Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])})
@@ -358,6 +361,46 @@ class Galaxy(object):
                 #print (np.sum(self.mass_map[key][loop]))
                 #print (totalflux)
         return convolve_fft(totalflux,convolve_func)
+
+    def generate_SED_IFU(self,wavelength,resolution=10,sedloopmap = None):
+        '''
+        gemerate the SED IFU for a galaxy object
+        ------
+        wavelength: 1D array,
+            the wavelength sample
+        resolution: int
+            number of logr grid to sample SED
+        ------
+        '''
+        ny,nx=self.shape
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
+        rmax = np.max(self.r_map)
+        r_grid = np.logspace(np.log10(0.5),np.log10(rmax),resolution)
+        waveintrin = wavelength/(1.+self.redshift)
+        av=3.1*self.ebv_G
+        cm=extinction.ccm89(wavelength,av,3.1)
+        dimfac = np.power(10,cm/(2.5))*(1+self.redshift)**3
+        for key in self.subCs:
+            for loop in range(len(self.subCs[key])):
+                SED_rgrid = []
+                for r in r_grid:
+                    age = Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
+                    Z = Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
+                    f_cont = Cal_map(r,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
+                    Av = Cal_map(r,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
+                    seds_total = SEDs.get_host_SED(waveintrin, 0., f_cont, age, Z, Av, 1.)
+                    SED_rgrid.append(seds_total/dimfac)
+                self.subCs[key][loop]['intp']=SED_rgrid
+        if sedloopmap is None:
+            sedloopmap = np.log10(self.r_map.copy())*resolution/np.log10(rmax)-0.01
+            sedloopmap = sedloopmap.astype(int)
+        for loopy in range(ny):
+            for loopx in range(nx):
+                for key in self.subCs:
+                    for loop in range(len(self.subCs[key])):
+                        tot_IFU[loopy,loopx,:] += self.mass_map[key][loop][loopy][loopx]*self.subCs[key][loop]['intp'][sedloopmap[loopy][loopx]]
+        return tot_IFU
+
 
 
 class AGN(object):
@@ -565,6 +608,92 @@ class AGN(object):
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         tot_IFU[inty,intx,:]=agnsed
         return tot_IFU
+
+class star(object):
+    def __init__(self,xcen,ycen,Teff=5000.,dis=10.):
+        self.xcen = xcen
+        self.ycen = ycen
+        self.Teff = Teff
+        self.dis = dis
+
+    def generate_image(self, shape, band, convolve_func, psfparams=None, transpar=None, psftype='psf'):
+        '''
+        Parameters:
+        shape: (y,x) of the output image
+
+        band: band of the output image
+
+        convolve_func: 2D array, the shape of empirical PSF
+
+        {psftype: [psfparams]}: a dict, the point spread function
+        eg.  {'psf': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
+             {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
+        '''
+        resp = Table.read(filterpath / band,format='ascii')
+        ny = shape[0]
+        nx = shape[1]
+        filter_x=resp['col1']
+        filter_y=resp['col2']
+        tminx = np.min(filter_x)
+        tmaxx = np.max(filter_x)
+        interX = np.linspace(tminx,tmaxx,100)
+        f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
+        ax=trapz(f2(interX),x=interX)
+        sed_rest = SEDs.Bbody(interX,self.Teff)*(10/self.dis)**2
+        flux_band = trapz(sed_rest*f2(interX),x=interX)/ax
+        magzero = 18.
+        mag = -2.5*np.log10(flux_band)+magzero
+        #print (mag)
+        psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
+        if transpar is None:
+            xpix,ypix = indentify_xy(self.xcen,self.ycen)
+        else:
+            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
+        profit_model = {'width':  nx,
+            'height': ny,
+            'magzero': magzero,
+            'psf': convolve_func,
+            'profiles': {psftype:[psfpar_copy]}
+           }
+        star_map, _ = pyprofit.make_model(profit_model)
+        return np.array(star_map)
+
+    def generate_SED_IFU(self, shape, wavelength, convolve_func, psfparams, transpar=None, psftype='psf'):
+        ny = shape[0]
+        nx = shape[1]
+        sed_rest = SEDs.Bbody(wavelength,self.Teff)*(10/self.dis)**2
+        magzero = 18.
+        mag = magzero
+        #print (mag)
+        psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
+        if transpar is None:
+            xpix,ypix = indentify_xy(self.xcen,self.ycen)
+        else:
+            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
+        profit_model = {'width':  nx,
+            'height': ny,
+            'magzero': magzero,
+            'psf': convolve_func,
+            'profiles': {psftype:[psfpar_copy]}
+           }
+        star_map, _ = pyprofit.make_model(profit_model)
+        tot_IFU = np.array(star_map).reshape((ny, nx, 1))
+        tot_IFU = sed_rest*tot_IFU
+        '''
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
+        for loopy in range(ny):
+            for loopx in range(nx):
+                tot_IFU[loopy,loopx,:] += star_map[loopy][loopx]*sed_rest
+        '''
+        return tot_IFU
+
+
 
 
 class PSF(object):
