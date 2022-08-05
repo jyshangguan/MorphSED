@@ -302,7 +302,7 @@ class Galaxy(object):
         #print (self.Zparams)
         return image, apertures
 
-    def fiducial_sed(self,wavelength,apertures=None):
+    def fiducial_sed(self,wavelength,apertures=None,dustnorm=None):
         fl = np.zeros_like(wavelength)
         waveintrin = wavelength/(1.+self.redshift)
         fllist = []
@@ -314,6 +314,8 @@ class Galaxy(object):
                 f_cont = Cal_map(0.,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                 Av = Cal_map(0.,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
                 fc = SEDs.get_host_SED(waveintrin, np.log10(self.mass*self.subCs[key][loop]['frac']/100.), f_cont, age, Z, Av, 1.)
+                if dustnorm is not None:
+                    fc += SEDs.get_nebular99(waveintrin, np.log10(self.mass*self.subCs[key][loop]['frac']/100.), f_cont, age, Z, dustnorm)
                 x,fll =  SEDs.sed_to_obse(waveintrin,fc,self.redshift,self.ebv_G)
                 if apertures is not None:
                     fll *= apertures[count]
@@ -322,7 +324,7 @@ class Galaxy(object):
                 count += 1
         return fl,fllist
 
-    def generate_image(self,band,convolve_func,inte_step=10):
+    def generate_image(self,band,convolve_func,inte_step=10,dustnorm=None):
         resp = Table.read(filterpath / band,format='ascii')
         ny = self.shape[0]
         nx = self.shape[1]
@@ -344,6 +346,8 @@ class Galaxy(object):
                 f_cont_zero = Cal_map(0.,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                 Av_zero = Cal_map(0.,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
                 centerSED = SEDs.get_host_SED(interX_intrin, 0., f_cont_zero, age_zero, Z_zero, Av_zero, 1.)
+                if dustnorm is not None:
+                    centerSED += SEDs.get_nebular99(interX_intrin, 0., f_cont_zero, age_zero, Z_zero, dustnorm)
                 flux_intrin = trapz(centerSED*f2(interX_intrin),x=interX_intrin)/ax
                 x, sed_obs = SEDs.sed_to_obse(interX_intrin,centerSED,self.redshift,self.ebv_G)
                 flux_band = trapz(sed_obs*f2(interX),x=interX)/ax
@@ -362,7 +366,7 @@ class Galaxy(object):
                 #print (totalflux)
         return convolve_fft(totalflux,convolve_func)
 
-    def generate_SED_IFU(self,wavelength,resolution=10,sedloopmap = None):
+    def generate_SED_IFU(self,wavelength,resolution=10,sedloopmap = None,dustnorm=None):
         '''
         gemerate the SED IFU for a galaxy object
         ------
@@ -389,6 +393,8 @@ class Galaxy(object):
                     f_cont = Cal_map(r,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                     Av = Cal_map(r,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
                     seds_total = SEDs.get_host_SED(waveintrin, 0., f_cont, age, Z, Av, 1.)
+                    if dustnorm is not None:
+                        seds_total += SEDs.get_nebular99(waveintrin, 0., f_cont, age, Z, dustnorm)
                     SED_rgrid.append(seds_total/dimfac)
                 self.subCs[key][loop]['intp']=SED_rgrid
         if sedloopmap is None:

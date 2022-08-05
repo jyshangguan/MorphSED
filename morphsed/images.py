@@ -95,6 +95,8 @@ class image(object):
         self.cut_mask_image = None
         self.coordinates_transfer_para = None
         self.sky_median = 0.
+        self.phys_to_counts_rate = 1.
+        self.band = None
 
     def img_cut(self,ra,dec,cutsize,cutposition=None,gain='CELL.GAIN',extime='EXPTIME',sigma_clipped=True):
         #cutsize is arcsec unit
