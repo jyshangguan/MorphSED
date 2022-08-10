@@ -157,7 +157,7 @@ def plotIFU(wavelength, IFU, figsize=(10,10)):
         label="w",
         valmin= wavelength.min(),
         valmax= wavelength.max(),
-        valinit=wavelength[1000],
+        valinit=wavelength[int(0.5*len(wavelength))],
         orientation="vertical"
     )
     axs = fig.add_axes([0.00, 0.25, 0.0225, 0.63])
@@ -175,7 +175,7 @@ def plotIFU(wavelength, IFU, figsize=(10,10)):
     aimage.set_yticks([])
 
 
-    image = IFU[:, :, 1000]
+    image = IFU[:, :, int(0.5*len(wavelength))]
     sky_std = np.nanstd(image)
     norm=ImageNormalize(vmin=0,vmax=10*sky_std,stretch=AsinhStretch())
     oimage = aimage.imshow(image, origin='lower',norm=norm, cmap='Greys',)

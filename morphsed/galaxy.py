@@ -39,8 +39,8 @@ def coordinates_transfer(x, y, kwargs):
     '''
     Transform the (x,y) from (\Delat RA, \Delta Dec) space to (pix, pix)
     '''
-    xp = kwargs['x0'] + x*kwargs['dxra'] + y*kwargs['dxdec']
-    yp = kwargs['y0'] + x*kwargs['dyra'] + y*kwargs['dydec']
+    xp = kwargs['x0'] + kwargs['x0shift'] + x*kwargs['dxra'] + y*kwargs['dxdec']
+    yp = kwargs['y0'] + kwargs['y0shift'] + x*kwargs['dyra'] + y*kwargs['dydec']
     return xp,yp
 
 def coordinates_transfer_inverse(xp, yp, kwargs):
@@ -148,6 +148,7 @@ class Galaxy(object):
         self.mass = mass
         self.Nsub=0
         self.subCs = {}
+        self.EL_region = None
         self.ageparams={}
         self.Zparams={}
         self.f_cont={}
@@ -291,15 +292,45 @@ class Galaxy(object):
                 image += mass_map
                 if self.r_map is None:
                     r = np.sqrt( (xmesh+0.5 - xpix)**2. + (ymesh+0.5 - ypix)**2.)
-                    self.r_map = r*transpar['pixsc']
+                    if transpar is not None:
+                        self.r_map = r*transpar['pixsc']
+                    else:
+                        self.r_map = r
                 if aperturemask is not None:
                     apertures.append(np.sum(mass_map[aperturemask])/ np.sum(mass_map))
-                #self.ageparams[key][loop].update({'age_map' : Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])})
-                #self.Zparams[key][loop].update({'Z_map' : Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])})
-        #print (self.Zparams)
+        if self.EL_region is not None:
+            for loop,eldict in enumerate(self.EL_region):
+                params = eldict['params']
+                par_copy = params.copy()
+                if transpar is not None:
+                    xpix,ypix = coordinates_transfer(params['xcen'],params['ycen'],transpar)
+                    par_copy['re'] = par_copy['re'] /transpar['pixsc']
+                    testang = par_copy['ang']+transpar['delta_ang']
+                    if testang > 90.:
+                        testang -= 180.
+                    elif testang < -90.:
+                        testang += 180.
+                    par_copy['ang'] = testang
+                else:
+                    xpix,ypix = indentify_xy(params['xcen'],params['ycen'])
+                par_copy['xcen'] = xpix
+                par_copy['ycen'] = ypix
+                profit_model = {'width':  nx,
+                    'height': ny,
+                    'magzero': magzero,
+                    'psf': convolve_func,
+                    'profiles': {eldict['pname']:[par_copy]}
+                   }
+                mass_map, _ = pyprofit.make_model(profit_model)
+                mass_map = np.array(mass_map)
+                mass_map = np.array(mass_map.tolist())
+                mass_map /= np.sum(mass_map)
+                self.EL_region[loop]['normmap'] = mass_map
+                if aperturemask is not None:
+                    self.EL_region[loop]['speape'] = np.sum(mass_map[aperturemask])/ np.sum(mass_map)
         return image, apertures
 
-    def fiducial_sed(self,wavelength,apertures=None):
+    def fiducial_sed(self,wavelength,apertures=None,dustnorm=None,par_tot=None):
         fl = np.zeros_like(wavelength)
         waveintrin = wavelength/(1.+self.redshift)
         fllist = []
@@ -311,15 +342,30 @@ class Galaxy(object):
                 f_cont = Cal_map(0.,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                 Av = Cal_map(0.,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
                 fc = SEDs.get_host_SED(waveintrin, np.log10(self.mass*self.subCs[key][loop]['frac']/100.), f_cont, age, Z, Av, 1.)
+                if dustnorm is not None:
+                    fc += SEDs.get_nebular99(waveintrin, np.log10(self.mass*self.subCs[key][loop]['frac']/100.), f_cont, age, Z, dustnorm)
                 x,fll =  SEDs.sed_to_obse(waveintrin,fc,self.redshift,self.ebv_G)
                 if apertures is not None:
                     fll *= apertures[count]
                 fl += fll
                 fllist.append(fll)
                 count += 1
+        if self.EL_region is not None:
+            for loop,eldict in enumerate(self.EL_region):
+                fc = np.zeros_like(waveintrin)
+                prefix = eldict['prefix']
+                for line in eldict['Lines']:
+                    cwave = par_tot[prefix+line['name']+'_center'].value
+                    width = par_tot[prefix+line['name']+'_FWHM'].value*cwave/tl2/c
+                    fc += SEDs.gaussian(waveintrin,par_tot[prefix+line['name']+'_Lumin'].value,cwave,width)
+                x,fll =  SEDs.sed_to_obse(waveintrin,fc,self.redshift,self.ebv_G)
+                if eldict['speape'] is not None:
+                    fll *= eldict['speape']
+                fl += fll
+                fllist.append(fll)
         return fl,fllist
 
-    def generate_image(self,band,convolve_func,inte_step=10):
+    def generate_image(self,band,convolve_func,inte_step=10,dustnorm=None,par_tot=None):
         resp = Table.read(filterpath / band,format='ascii')
         ny = self.shape[0]
         nx = self.shape[1]
@@ -332,7 +378,6 @@ class Galaxy(object):
         ax=trapz(f2(interX),x=interX)
         r_grid = np.logspace(-1,np.log10(np.max(self.r_map)),inte_step)
         totalflux = np.zeros(self.shape,dtype=float)
-        #print (r_grid)
         interX_intrin = interX/(1.+self.redshift)
         for key in self.subCs:
             for loop in range(len(self.subCs[key])):
@@ -341,6 +386,8 @@ class Galaxy(object):
                 f_cont_zero = Cal_map(0.,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
                 Av_zero = Cal_map(0.,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
                 centerSED = SEDs.get_host_SED(interX_intrin, 0., f_cont_zero, age_zero, Z_zero, Av_zero, 1.)
+                if dustnorm is not None:
+                    centerSED += SEDs.get_nebular99(interX_intrin, 0., f_cont_zero, age_zero, Z_zero, dustnorm)
                 flux_intrin = trapz(centerSED*f2(interX_intrin),x=interX_intrin)/ax
                 x, sed_obs = SEDs.sed_to_obse(interX_intrin,centerSED,self.redshift,self.ebv_G)
                 flux_band = trapz(sed_obs*f2(interX),x=interX)/ax
@@ -352,12 +399,95 @@ class Galaxy(object):
                                 , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
                 Av_gradient = Cal_gradient_map(r_grid, self.r_map, 'Av', self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic']
                                 , flux_intrin, f2, interX_intrin, ax, age_zero=age_zero, Z_zero=Z_zero, f_cont_zero=f_cont_zero, Av_zero=Av_zero)
-                #print (age_zero,Z_zero,f_cont_zero,Av_zero,Av_gradient)
                 totalflux += flux_band*self.mass_map[key][loop]*age_gradient*Z_gradient*f_cont_gradient*Av_gradient
-                #print (self.mass_map[key][loop])
-                #print (np.sum(self.mass_map[key][loop]))
-                #print (totalflux)
+        if self.EL_region is not None:
+            for loop,eldict in enumerate(self.EL_region):
+                fc = np.zeros_like(interX)
+                prefix = eldict['prefix']
+                for line in eldict['Lines']:
+                    cwave = par_tot[prefix+line['name']+'_center'].value
+                    width = par_tot[prefix+line['name']+'_FWHM'].value*cwave/tl2/c
+                    fc += SEDs.gaussian(interX,par_tot[prefix+line['name']+'_Lumin'].value,cwave,width)
+                x,fll =  SEDs.sed_to_obse(interX,fc,self.redshift,self.ebv_G)
+                flux_band = trapz(fll*f2(interX),x=interX)/ax
+                totalflux += flux_band*eldict['normmap']
         return convolve_fft(totalflux,convolve_func)
+
+    def generate_SED_IFU(self,wavelength,resolution=10,sedloopmap = None,dustnorm=None,par_tot=None):
+        '''
+        gemerate the SED IFU for a galaxy object
+        ------
+        wavelength: 1D array,
+            the wavelength sample
+        resolution: int
+            number of logr grid to sample SED
+        ------
+        '''
+        ny,nx=self.shape
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
+        rmax = np.max(self.r_map)
+        r_grid = np.logspace(np.log10(0.5),np.log10(rmax),resolution)
+        waveintrin = wavelength/(1.+self.redshift)
+        av=3.1*self.ebv_G
+        cm=extinction.ccm89(wavelength,av,3.1)
+        dimfac = np.power(10,cm/(2.5))*(1+self.redshift)**3
+        for key in self.subCs:
+            for loop in range(len(self.subCs[key])):
+                SED_rgrid = []
+                for r in r_grid:
+                    age = Cal_map(r,self.ageparams[key][loop]['type'],self.ageparams[key][loop]['paradic'])
+                    Z = Cal_map(r,self.Zparams[key][loop]['type'],self.Zparams[key][loop]['paradic'])
+                    f_cont = Cal_map(r,self.f_cont[key][loop]['type'],self.f_cont[key][loop]['paradic'])
+                    Av = Cal_map(r,self.Avparams[key][loop]['type'],self.Avparams[key][loop]['paradic'])
+                    seds_total = SEDs.get_host_SED(waveintrin, 0., f_cont, age, Z, Av, 1.)
+                    if dustnorm is not None:
+                        seds_total += SEDs.get_nebular99(waveintrin, 0., f_cont, age, Z, dustnorm)
+                    SED_rgrid.append(seds_total/dimfac)
+                self.subCs[key][loop]['intp']=SED_rgrid
+        if sedloopmap is None:
+            sedloopmap = np.log10(self.r_map.copy())*resolution/np.log10(rmax)-0.01
+            sedloopmap = sedloopmap.astype(int)
+        for loopy in range(ny):
+            for loopx in range(nx):
+                for key in self.subCs:
+                    for loop in range(len(self.subCs[key])):
+                        tot_IFU[loopy,loopx,:] += self.mass_map[key][loop][loopy][loopx]*self.subCs[key][loop]['intp'][sedloopmap[loopy][loopx]]
+        if self.EL_region is not None:
+            for loop,eldict in enumerate(self.EL_region):
+                fc = np.zeros_like(waveintrin)
+                prefix = eldict['prefix']
+                for line in eldict['Lines']:
+                    cwave = par_tot[prefix+line['name']+'_center'].value
+                    width = par_tot[prefix+line['name']+'_FWHM'].value*cwave/tl2/c
+                    fc += SEDs.gaussian(waveintrin,par_tot[prefix+line['name']+'_Lumin'].value,cwave,width)
+                fll =  fc/dimfac
+                prli = np.array(eldict['normmap']).reshape((ny, nx, 1))
+                tot_IFU += prli*fll
+        return tot_IFU
+
+    def add_extended_EL_region(self, prefix, Pro_names, params, Lines):
+        '''
+        To add a extended emission line region for a galaxy object
+
+        Pro_names: the name of the profiles
+        e.g. = "sersic" "coresersic" "brokenexp" "moffat" "ferrer" "king" "pointsource"
+
+        params: a dictionary of the parameters for this subcomponent
+        e.g. for sersic: {'xcen': 50.0, 'ycen': 50.0, 'frac': 0.704, 're': 10.0,
+        'nser': 3.0, 'ang': -32.70422048691768, 'axrat': 1.0, 'box': 0.0, 'convolve': False}
+        '''
+        if self.EL_region is None:
+            self.EL_region = []
+        eldict = {
+            'prefix' : prefix,
+            'pname'  : Pro_names,
+            'params' : params,
+            'normmap': None,
+            'Lines'  : Lines,
+            'speape' : None,
+            }
+        self.EL_region.append(eldict)
+
 
 
 class AGN(object):
@@ -504,7 +634,7 @@ class AGN(object):
         if (self.NLR is not None)&(par_tot is not None):
             agnsed_rest += self.NLR.eval(par_tot,x=waveintrin)
         if self.Av > 0.:
-            cm=extinction.ccm89(waveintrin,Av,3.1)/2.5
+            cm=extinction.ccm89(waveintrin,self.Av,3.1)/2.5
             agnsed_rest /= 10**cm
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         flux_band = trapz(agnsed*f2(interX),x=interX)/ax
@@ -512,17 +642,18 @@ class AGN(object):
         mag = -2.5*np.log10(flux_band)+magzero
         #print (mag)
         psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
         if transpar is None:
             xpix,ypix = indentify_xy(self.xcen,self.ycen)
         else:
-            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
-        psfparams['xcen'] = xpix
-        psfparams['ycen'] = ypix
+            xpix,ypix = coordinates_transfer(psfparams['xcen'],psfparams['ycen'],transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
         profit_model = {'width':  nx,
             'height': ny,
             'magzero': magzero,
             'psf': convolve_func,
-            'profiles': {psftype:[psfparams]}
+            'profiles': {psftype:[psfpar_copy]}
            }
         agn_map, _ = pyprofit.make_model(profit_model)
         return np.array(agn_map)
@@ -564,6 +695,92 @@ class AGN(object):
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         tot_IFU[inty,intx,:]=agnsed
         return tot_IFU
+
+class star(object):
+    def __init__(self,xcen,ycen,Teff=5000.,dis=10.):
+        self.xcen = xcen
+        self.ycen = ycen
+        self.Teff = Teff
+        self.dis = dis
+
+    def generate_image(self, shape, band, convolve_func, psfparams=None, transpar=None, psftype='psf'):
+        '''
+        Parameters:
+        shape: (y,x) of the output image
+
+        band: band of the output image
+
+        convolve_func: 2D array, the shape of empirical PSF
+
+        {psftype: [psfparams]}: a dict, the point spread function
+        eg.  {'psf': [{'xcen':50, 'ycen':50}]}     stands for a point sources which have same shape as the empirical PSF
+             {'moffat': [{'xcen':50, 'ycen':50, 'fwhm':3., 'con':'5.'}]}
+        '''
+        resp = Table.read(filterpath / band,format='ascii')
+        ny = shape[0]
+        nx = shape[1]
+        filter_x=resp['col1']
+        filter_y=resp['col2']
+        tminx = np.min(filter_x)
+        tmaxx = np.max(filter_x)
+        interX = np.linspace(tminx,tmaxx,100)
+        f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
+        ax=trapz(f2(interX),x=interX)
+        sed_rest = SEDs.Bbody(interX,self.Teff)*(10/self.dis)**2
+        flux_band = trapz(sed_rest*f2(interX),x=interX)/ax
+        magzero = 18.
+        mag = -2.5*np.log10(flux_band)+magzero
+        #print (mag)
+        psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
+        if transpar is None:
+            xpix,ypix = indentify_xy(self.xcen,self.ycen)
+        else:
+            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
+        profit_model = {'width':  nx,
+            'height': ny,
+            'magzero': magzero,
+            'psf': convolve_func,
+            'profiles': {psftype:[psfpar_copy]}
+           }
+        star_map, _ = pyprofit.make_model(profit_model)
+        return np.array(star_map)
+
+    def generate_SED_IFU(self, shape, wavelength, convolve_func, psfparams, transpar=None, psftype='psf'):
+        ny = shape[0]
+        nx = shape[1]
+        sed_rest = SEDs.Bbody(wavelength,self.Teff)*(10/self.dis)**2
+        magzero = 18.
+        mag = magzero
+        #print (mag)
+        psfparams.update({'mag':mag})
+        psfpar_copy=psfparams.copy()
+        if transpar is None:
+            xpix,ypix = indentify_xy(self.xcen,self.ycen)
+        else:
+            xpix,ypix = coordinates_transfer(self.xcen,self.ycen,transpar)
+        psfpar_copy['xcen'] = xpix
+        psfpar_copy['ycen'] = ypix
+        profit_model = {'width':  nx,
+            'height': ny,
+            'magzero': magzero,
+            'psf': convolve_func,
+            'profiles': {psftype:[psfpar_copy]}
+           }
+        star_map, _ = pyprofit.make_model(profit_model)
+        tot_IFU = np.array(star_map).reshape((ny, nx, 1))
+        tot_IFU = sed_rest*tot_IFU
+        '''
+        tot_IFU = np.zeros((ny,nx,len(wavelength)))
+        for loopy in range(ny):
+            for loopx in range(nx):
+                tot_IFU[loopy,loopx,:] += star_map[loopy][loopx]*sed_rest
+        '''
+        return tot_IFU
+
+
 
 
 class PSF(object):

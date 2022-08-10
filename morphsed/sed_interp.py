@@ -42,6 +42,14 @@ sed_data = np.load('{0}/templates/host_inst.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_inst = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
 
+sed_data = np.load('{0}/templates/dustsb99.npz'.format(DATA_PATH))
+points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
+intp_nebular99 = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
+
+sed_data = np.load('{0}/templates/dustsb99_conti.npz'.format(DATA_PATH))
+points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
+intp_nebular99_conti = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
+
 sed_data = np.load('{0}/templates/host_conti_hires.npz'.format(DATA_PATH))
 points = (sed_data['Z'], sed_data['age'], sed_data['wave'])
 intp_host_hres_cont = RegularGridInterpolator(points, sed_data['sed'],bounds_error=False,fill_value=0.)
@@ -61,6 +69,7 @@ def gaussian3D(x, amp, cen, wid):
     for loop in range(tlen):
         IFU[:,:,loop] = (amp / (np.sqrt(2*np.pi) * wid)) * np.exp(-(x[loop]-cen)**2 / (2*wid**2))
     return IFU
+
 
 feii_template_op = Table.read('{0}/templates/irontemplate_op_new.ipac'.format(DATA_PATH),format='ascii')
 feii_template_uv = Table.read('{0}/templates/irontemplate_uv.ipac'.format(DATA_PATH),format='ascii')
@@ -94,7 +103,6 @@ def BaC(x,cf,logM,logMdot,spin,dcen,fwhm):
     wave = wave_bac[mask]
     flux = 10**intp_BLRDC((spin,logM,logMdot,wave))
     return cf*conv_spec(x,wave,flux,kernel.array,dcenlog,referwave)
-
 
 def conv_spec(x, wave, flux, kernel, dcenlog, referwave):
     '''
@@ -164,6 +172,24 @@ def get_host_SED_3D(x, logM, f_cont, age, Z, sigma, Av, C_unit):
     cm=extinction.ccm89(x,Av,3.1)/2.5
     return rest_spec/(10**cm)
 
+def get_nebular99(x, logM, f_cont, age, Z, C_unit):
+    if f_cont < 0.:
+        f_cont = 0.
+    elif f_cont > 1. :
+        f_cont = 1.
+    M=10**logM
+    age_yr = age*1e9
+    M_cont = M*f_cont
+    SFR = M_cont*1e-10
+    M_inst = M-M_cont
+    sed1 = (10**intp_nebular99((Z, age_yr, x)))*M_inst*1e-7
+    if f_cont == 0. :
+        sed2 = np.zeros_like(sed1,dtype=float)
+    else:
+        sed2 = (10**intp_nebular99_conti((Z, 1e10, x)))*SFR*1e-1
+    fluxmodel = C_unit*(sed1+sed2)
+    return fluxmodel
+
 def get_host_SED(x, logM, f_cont, age, Z, Av, C_unit):
     # intp_burst_cont normalized by SFR = 10 Ms/yr
     # intp_burst_inst normalized by M_ast = 10^7 Ms
@@ -221,3 +247,8 @@ def sed_to_rest(x,y,z,ebv):
     xnew/=(1+z)
     ynew*=(1+z)**3
     return xnew,ynew
+
+def Bbody(x, Teff):
+    # Normalized to R_s
+    fx = 190095060845894.53/(x**5*(np.exp(143876866./(Teff*x))-1))
+    return fx

@@ -1,6 +1,6 @@
 import numpy as np
 from astropy.modeling.functional_models import Sersic1D
-from .galaxy import coordinates_transfer
+from .galaxy import coordinates_transfer,indentify_xy
 import cv2
 
 def alpha_tanh(r_3d, r_in, r_out, alpha, theta_out):
@@ -33,13 +33,32 @@ def R_fourier(x,y,m,am,theta_m,PA,i):
     phi_map[lower] = 2.*np.pi-phi_map[lower]
     return R_3d(x,y,PA,i)*(1.+am*np.cos(m*(phi_map+theta_m*np.pi/180.)))
 
-def make_fourier(M, seRe, sen, shape, posi, PA, i, r_in, r_out, alpha, theta_out, m, am, i_arm, theta_m):
+def make_fourier(M, seRe, sen, shape, posi, PA, i, r_in, r_out, alpha, theta_out, m, am, theta_m, i_arm, transpar=None):
+    '''
+    seRe,sen: control the mass distribution of the arms
+    i, PA galaxy projection
+    r_in, r_out, alpha, theta_out: rotation curve
+    m, am, theta_m, i_arm: arm number, relative strength
+    '''
     ny = shape[0]
     nx = shape[1]
-    xcen = posi[0]
-    ycen = posi[1]
     xaxis = np.arange(nx)
     yaxis = np.arange(ny)
+    xcen = posi[0]
+    ycen = posi[1]
+    if transpar is not None:
+        xcen,ycen = coordinates_transfer(posi[0],posi[1],transpar)
+        seRe = seRe /transpar['pixsc']
+        r_in = r_in /transpar['pixsc']
+        r_out = r_out /transpar['pixsc']
+        testPA = PA+transpar['delta_ang']
+        if testPA > 90.:
+            testPA -= 180.
+        elif testPA < -90.:
+            testPA += 180.
+        PA = testPA
+    else:
+        xcen,ycen = indentify_xy(posi[0],posi[1])
     xmesh, ymesh = np.meshgrid(xaxis, yaxis)
     x_p = xmesh + 0.5 - xcen
     y_p = ymesh + 0.5 - ycen
@@ -49,6 +68,7 @@ def make_fourier(M, seRe, sen, shape, posi, PA, i, r_in, r_out, alpha, theta_out
     x_p,y_p = xy_3d(x_p,y_p,PA,i)
     x_i = x_p*np.cos(theta_r) + y_p*np.sin(theta_r)
     y_i = -x_p*np.sin(theta_r) + y_p*np.cos(theta_r)
+    #i_arm = 0.
     r_3d_i = R_fourier(x_i,y_i,m,am,theta_m,PA,i_arm)
     s1 = Sersic1D(amplitude=1, r_eff=seRe, n=sen)
     mod = s1(r_3d_i)
