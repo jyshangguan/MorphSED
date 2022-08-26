@@ -507,6 +507,7 @@ class AGN(object):
         self.ebv_G = ebv_G
         self.BLR = m_BLR
         self.NLR = m_NLR
+        self.sedModel = 'TD'
 
     def reset_BH(self, logM_BH,logLedd, astar, Av):
         self.logM_BH = logM_BH
@@ -514,6 +515,9 @@ class AGN(object):
         self.astar = astar
         self.Av = Av
         return
+
+    def change_SED(self, sedmodel):
+        self.sedModel = sedmodel
 
     def set_full_model(self, obsspec, lines_broad, lines_narrow, nbroad=2, nnarrow=1,strict=0.01,broader=12000.,prefix='',**kwargs):
         '''
@@ -626,7 +630,12 @@ class AGN(object):
         f2=interp1d(filter_x,filter_y,bounds_error=False,fill_value=0.)
         ax=trapz(f2(interX),x=interX)
         waveintrin = interX/(1.+self.redshift)
-        agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+        if self.sedModel == 'TD':
+            agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+        elif self.sedModel == 'SP':
+            agnsed_rest = SEDs.spowerlaw(waveintrin,10**par_tot['logL5100'].value,par_tot['plC'].value)
+        elif self.sedModel == 'BP':
+            agnsed_rest = SEDs.brokenpower(waveintrin,10**par_tot['logL5100'].value,par_tot['plC1'].value,par_tot['plC2'].value)
         if self.BLR is None:
             agnsed_rest += 10**intp_BLRTOT((spin,logM,logMdot,waveintrin))
         elif par_tot is not None:
@@ -644,7 +653,7 @@ class AGN(object):
         psfparams.update({'mag':mag})
         psfpar_copy=psfparams.copy()
         if transpar is None:
-            xpix,ypix = indentify_xy(self.xcen,self.ycen)
+            xpix,ypix = indentify_xy(psfparams['xcen'],psfparams['ycen'])
         else:
             xpix,ypix = coordinates_transfer(psfparams['xcen'],psfparams['ycen'],transpar)
         psfpar_copy['xcen'] = xpix
@@ -661,7 +670,12 @@ class AGN(object):
     def fiducial_sed(self,wavelength,turnoff=False,par_tot=None):
         waveintrin = wavelength/(1.+self.redshift)
         if not turnoff:
-            agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+            if self.sedModel == 'TD':
+                agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+            elif self.sedModel == 'SP':
+                agnsed_rest = SEDs.spowerlaw(waveintrin,10**par_tot['logL5100'].value,par_tot['plC'].value)
+            elif self.sedModel == 'BP':
+                agnsed_rest = SEDs.brokenpower(waveintrin,10**par_tot['logL5100'].value,par_tot['plC1'].value,par_tot['plC2'].value)
             if self.BLR is None:
                 agnsed_rest += 10**SEDs.intp_BLRTOT((self.astar,self.logM_BH,self.logLedd,waveintrin))
             elif par_tot is not None:
@@ -678,13 +692,16 @@ class AGN(object):
         x,agnsed = SEDs.sed_to_obse(waveintrin,agnsed_rest,self.redshift,self.ebv_G)
         return agnsed
 
-    def generate_SED_IFU(self, wavelength, shape, position,par_BLR=None):
+    def generate_SED_IFU(self, wavelength, shape, position, par_BLR=None):
         ny,nx = shape
         tot_IFU = np.zeros((ny,nx,len(wavelength)))
         inty = int(position[1])
         intx = int(position[0])
         waveintrin = wavelength/(1.+self.redshift)
-        agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+        if self.sedModel == 'TD':
+            agnsed_rest = SEDs.get_AGN_SED(waveintrin,self.logM_BH,self.logLedd,self.astar,1.)
+        elif self.sedModel == 'SP':
+            agnsed_rest = SEDs.spowerlaw(waveintrin,10**par_BLR['logL5100'].value,par_BLR['plC'].value)
         if self.BLR is None:
             agnsed_rest += 10**SEDs.intp_BLRTOT((self.astar,self.logM_BH,self.logLedd,waveintrin))
         elif par_BLR is not None:

@@ -248,6 +248,15 @@ def sed_to_rest(x,y,z,ebv):
     ynew*=(1+z)**3
     return xnew,ynew
 
+def spowerlaw(x,A,C):
+    y = A*np.power(x/5100.,-C)
+    return y
+
+def brokenpower(x,A,C1,C2):
+    y = A*np.power(x/5100.,-C1)
+    y[x<5100.] = A*np.power(x[x<5100.]/5100.,-C2)
+    return y
+
 def Bbody(x, Teff):
     # Normalized to R_s
     fx = 190095060845894.53/(x**5*(np.exp(143876866./(Teff*x))-1))
