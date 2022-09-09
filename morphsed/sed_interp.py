@@ -88,6 +88,8 @@ def FeII(x,A_uv,A_op,dcen,fwhm):
     kernel = Gaussian1DKernel(referwave*std,x_size=kersize)
     kernel.normalize()
     mask = (wavemodel > (1.-5*std-dcenlog)*x.min())&(wavemodel < (1.+5*std+dcenlog)*x.max())
+    if np.sum(mask) == 0:
+        return np.zeros_like(x)
     wave = wavemodel[mask]
     flux = fluxmodel[mask]
     return conv_spec(x,wave,flux,kernel.array,dcenlog,referwave)
@@ -100,6 +102,8 @@ def BaC(x,cf,logM,logMdot,spin,dcen,fwhm):
     kernel = Gaussian1DKernel(referwave*std,x_size=kersize)
     kernel.normalize()
     mask = (wave_bac > (1.-5*std-dcenlog)*x.min())&(wave_bac < (1.+5*std+dcenlog)*x.max())
+    if np.sum(mask) == 0:
+        return np.zeros_like(x)
     wave = wave_bac[mask]
     flux = 10**intp_BLRDC((spin,logM,logMdot,wave))
     return cf*conv_spec(x,wave,flux,kernel.array,dcenlog,referwave)
@@ -249,7 +253,7 @@ def sed_to_rest(x,y,z,ebv):
     return xnew,ynew
 
 def spowerlaw(x,A,C):
-    y = A*np.power(x/5100.,-C)
+    y = A*np.power(x/5100.,-C)/5100
     return y
 
 def brokenpower(x,A,C1,C2):

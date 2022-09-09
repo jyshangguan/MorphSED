@@ -797,7 +797,10 @@ class star(object):
         '''
         return tot_IFU
 
-
+class psfbulge(object):
+    def __init__(self,xcen,ycen):
+        self.xcen=xcen
+        self.ycen=ycen
 
 
 class PSF(object):
